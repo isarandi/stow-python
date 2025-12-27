@@ -8,7 +8,7 @@ The goal here is identical behavior to GNU Stow, to achieve true, worry-free dro
 
 ## Install
 
-Stow-Python is a single self-contained executable Python script that you can simply drop directly into any directory in your PATH, such as `~/.local/bin`:
+Stow-Python has a single self-contained executable Python script `stow`, which you can simply drop directly into any directory in your PATH, such as `~/.local/bin`:
 
 ```bash
 wget -O ~/.local/bin/stow https://raw.githubusercontent.com/isarandi/stow-python/main/bin/stow
