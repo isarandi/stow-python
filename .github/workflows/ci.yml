@@ -7,9 +7,36 @@ on:
     branches: [main]
 
 jobs:
+  download-stow:
+    name: Download GNU Stow
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache GNU Stow
+        id: cache-stow
+        uses: actions/cache@v4
+        with:
+          path: tests/gnu_stow_for_testing
+          key: gnu-stow-2.4.1
+
+      - name: Download and build GNU Stow
+        if: steps.cache-stow.outputs.cache-hit != 'true'
+        run: |
+          cd tests
+          ./get_gnu_stow_for_testing_identical_behavior.sh
+
+      - name: Upload GNU Stow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gnu-stow
+          path: tests/gnu_stow_for_testing
+          retention-days: 1
+
   test:
     name: Test Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    needs: download-stow
     strategy:
       fail-fast: false
       matrix:
@@ -26,10 +53,11 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest
 
-      - name: Download GNU Stow for oracle tests
-        run: |
-          cd tests
-          ./get_gnu_stow_for_testing_identical_behavior.sh
+      - name: Download GNU Stow artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gnu-stow
+          path: tests/gnu_stow_for_testing
 
       - name: Run tests
         run: pytest tests/ -v
@@ -37,6 +65,7 @@ jobs:
   test-py36:
     name: Test Python 3.6
     runs-on: ubuntu-latest
+    needs: download-stow
     container: python:3.6
     steps:
       - uses: actions/checkout@v4
@@ -50,10 +79,11 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest
 
-      - name: Download GNU Stow for oracle tests
-        run: |
-          cd tests
-          ./get_gnu_stow_for_testing_identical_behavior.sh
+      - name: Download GNU Stow artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gnu-stow
+          path: tests/gnu_stow_for_testing
 
       - name: Run tests
         run: pytest tests/ -v
@@ -61,6 +91,7 @@ jobs:
   test-py27:
     name: Test Python 2.7
     runs-on: ubuntu-latest
+    needs: download-stow
     container: python:2.7
     steps:
       - uses: actions/checkout@v4
@@ -74,10 +105,11 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest
 
-      - name: Download GNU Stow for oracle tests
-        run: |
-          cd tests
-          ./get_gnu_stow_for_testing_identical_behavior.sh
+      - name: Download GNU Stow artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gnu-stow
+          path: tests/gnu_stow_for_testing
 
       - name: Run tests
         run: pytest tests/ -v
