@@ -26,12 +26,12 @@ import shutil
 import sys
 
 # Import from the single-file stow script in bin/
-# Use importlib since the script has no .py extension
-import importlib.util
+# Use types.ModuleType for Python 2.7 compatibility (no importlib.util)
+import types
 _stow_path = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin', 'stow')
-_spec = importlib.util.spec_from_loader('stow_module', loader=None, origin=_stow_path)
-stow_module = importlib.util.module_from_spec(_spec)
+stow_module = types.ModuleType('stow_module')
+stow_module.__file__ = _stow_path
 with open(_stow_path) as _f:
     exec(compile(_f.read(), _stow_path, 'exec'), stow_module.__dict__)
 sys.modules['stow_module'] = stow_module
