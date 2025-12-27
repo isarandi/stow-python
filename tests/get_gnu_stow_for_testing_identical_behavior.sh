@@ -18,4 +18,9 @@ cd "$DEST_DIR"
 ./configure --prefix="$DEST_DIR/install" >/dev/null
 make bin/stow bin/chkstow lib/Stow.pm lib/Stow/Util.pm >/dev/null
 
+# Fix the lib path in bin/stow to use the local lib directory instead of install
+# The generated bin/stow has 'use lib "...install/share/perl/..."' which doesn't exist
+# after just 'make' (without 'make install'). Point it to the local lib/ instead.
+sed -i 's|use lib "[^"]*";|use lib "'"$DEST_DIR"'/lib";|' bin/stow bin/chkstow
+
 echo "Perl stow ${VERSION} built in ${DEST_DIR}"

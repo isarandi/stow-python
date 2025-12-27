@@ -320,6 +320,12 @@ def adjust_dotfile(pkg_node):
     """
     Converts dot-X to .X for dotfiles mode.
     Used when stowing with --dotfiles flag.
+
+    Only transforms 'dot-X' to '.X' when X starts with a non-dot character.
+    This prevents transforming:
+    - 'dot-' (no character after dash)
+    - 'dot-.' (next char is dot)
+    - 'dot-..' (next char is dot)
     """
     # Perl: (my $adjusted = $pkg_node) =~ s/^dot-([^.])/.$1/;
     # Matches "dot-" followed by a character that is not a dot
