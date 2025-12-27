@@ -1,6 +1,6 @@
 # Stow-Python
 
-This is a pedantically faithful, singe-file, dependency-free Python reimplementation of all of [GNU Stow](https://www.gnu.org/software/stow/), the symlink farm manager, that runs on any Python version from 2.7 to 3.14 and beyond.
+This is a pedantically faithful, single-file, dependency-free Python reimplementation of all of [GNU Stow](https://www.gnu.org/software/stow/), the symlink farm manager, that runs on any Python version from 2.7 to 3.14 and beyond.
 
 The reason for making this is that GNU Stow is very useful but it's written in Perl. This can cause some headaches on some HPC clusters or other systems that you don't control yourself regarding the Perl toolchain. This reimplementation lets you use Stow on systems where Perl isn't available (or isn't the correct version, or misses some packages etc.) but *some* version of Python is there (2.7 or 3.0–3.14+), which is basically always.
 
