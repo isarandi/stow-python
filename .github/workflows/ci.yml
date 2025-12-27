@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.6", "3.8", "3.10", "3.12", "3.13"]
+        python-version: ["3.8", "3.10", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +22,31 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        run: pip install pytest
+
+      - name: Download GNU Stow for oracle tests
+        run: |
+          cd tests
+          ./get_gnu_stow_for_testing_identical_behavior.sh
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  test-py36:
+    name: Test Python 3.6
+    runs-on: ubuntu-latest
+    container: python:3.6
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sed -i 's/deb.debian.org/archive.debian.org/g' /etc/apt/sources.list
+          sed -i 's/security.debian.org/archive.debian.org/g' /etc/apt/sources.list
+          sed -i '/stretch-updates/d' /etc/apt/sources.list
+          apt-get update && apt-get install -y perl make
 
       - name: Install test dependencies
         run: pip install pytest
