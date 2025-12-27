@@ -1,0 +1,21 @@
+# Downloaded Perl stow source for oracle testing
+tests/gnu_stow_for_testing/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# pytest
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/

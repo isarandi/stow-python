@@ -1,0 +1,178 @@
+#!/usr/bin/env python
+#
+# Stow-Python - Python reimplementation of GNU Stow
+# Python reimplementation by Istvan Sarandi (2025).
+# Original GNU Stow by Bob Glickstein, Guillaume Morin, Kahlil Hodgson,
+# Adam Spiers, and others.
+#
+# This file is part of Stow-Python.
+#
+# Stow-Python is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Stow-Python is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see https://www.gnu.org/licenses/.
+
+"""
+chkstow - Check stow target directory for problems.
+
+Modes:
+    -b, --badlinks  Report symlinks pointing to non-existent files (default)
+    -a, --aliens    Report non-symlink, non-directory files
+    -l, --list      List packages in the target directory
+"""
+
+from __future__ import print_function
+
+import os
+import re
+import sys
+
+DEFAULT_TARGET = os.environ.get('STOW_DIR', '/usr/local/')
+
+# Global state (matches Perl module structure for testability)
+Wanted = None  # Will be set to a function
+Package = {}
+Stow_dir = ''
+Target = DEFAULT_TARGET
+
+
+def bad_links(path):
+    """Check for symlinks that point to non-existent files."""
+    if os.path.islink(path) and not os.path.exists(path):
+        print("Bogus link: %s" % path)
+
+
+def aliens(path):
+    """Check for files that are not symlinks or directories."""
+    if not os.path.islink(path) and not os.path.isdir(path):
+        print("Unstowed file: %s" % path)
+
+
+def list_pkg(path):
+    """Extract package name from symlink and record it."""
+    if os.path.islink(path):
+        link_dest = os.readlink(path)
+        # Remove leading ../stow/ prefix
+        link_dest = re.sub(r'^(?:\.\./)+stow/', '', link_dest)
+        # Remove everything after first /
+        link_dest = re.sub(r'/.*', '', link_dest)
+        Package[link_dest] = 1
+
+
+# Expose as 'list' for Perl compatibility (tests use chkstow.list)
+# Note: This shadows the built-in list() but that's intentional for module access
+# We use [:] slicing instead of list() in check_stow to avoid the conflict
+
+
+def skip_dirs(dirpath):
+    """Check if directory should be skipped (contains .stow or .notstowed)."""
+    stow_marker = os.path.join(dirpath, '.stow')
+    notstowed_marker = os.path.join(dirpath, '.notstowed')
+    if os.path.exists(stow_marker) or os.path.exists(notstowed_marker):
+        sys.stderr.write("skipping %s\n" % dirpath)
+        return True
+    return False
+
+
+def check_stow():
+    """Walk target directory and apply the Wanted function."""
+    for dirpath, dirnames, filenames in os.walk(Target):
+        # Check if we should skip this directory
+        if skip_dirs(dirpath):
+            # Clear dirnames to prevent descending into this directory
+            dirnames[:] = []
+            continue
+
+        # Process files
+        for filename in filenames:
+            path = os.path.join(dirpath, filename)
+            Wanted(path)
+
+        # Process symlinks that point to directories (os.walk treats them as files)
+        # We need to check dirnames for symlinks too
+        for dirname in dirnames[:]:
+            path = os.path.join(dirpath, dirname)
+            if os.path.islink(path):
+                Wanted(path)
+
+    # If listing packages, print them
+    if Wanted == list_pkg:
+        # Remove empty and parent entries
+        Package.pop('', None)
+        Package.pop('..', None)
+
+        if Package:
+            for pkg in sorted(Package.keys()):
+                print(pkg)
+
+
+def process_options():
+    """Process command line options."""
+    global Wanted, Target
+
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+
+        if arg in ('-b', '--badlinks'):
+            Wanted = bad_links
+        elif arg in ('-a', '--aliens'):
+            Wanted = aliens
+        elif arg in ('-l', '--list'):
+            Wanted = list_pkg
+        elif arg in ('-t', '--target') and i + 1 < len(sys.argv):
+            i += 1
+            Target = sys.argv[i]
+        elif arg.startswith('--target='):
+            Target = arg[9:]
+        elif arg.startswith('-t'):
+            Target = arg[2:]
+        else:
+            usage()
+
+        i += 1
+
+
+def usage():
+    """Print usage message and exit."""
+    print("""USAGE: chkstow [options]
+
+Options:
+    -t DIR, --target=DIR  Set the target directory to DIR
+                          (default is %s)
+    -b, --badlinks        Report symlinks that point to non-existent files
+    -a, --aliens          Report non-symlinks in the target directory
+    -l, --list            List packages in the target directory
+
+--badlinks is the default mode.""" % DEFAULT_TARGET)
+    sys.exit(0)
+
+
+def main():
+    """Main entry point."""
+    global Wanted
+
+    if len(sys.argv) == 1:
+        usage()
+
+    # Default mode is badlinks
+    Wanted = bad_links
+
+    process_options()
+    check_stow()
+
+
+# Alias for Perl compatibility - tests use chkstow.list
+list = list_pkg
+
+
+if __name__ == '__main__':
+    main()

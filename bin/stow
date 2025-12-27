@@ -1,0 +1,2565 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# Stow-Python - Python reimplementation of GNU Stow
+# Python reimplementation:
+#   Copyright (C) 2025 Istvan Sarandi
+# Original GNU Stow:
+#   Copyright (C) 1993, 1994, 1995, 1996 by Bob Glickstein
+#   Copyright (C) 2000, 2001 Guillaume Morin
+#   Copyright (C) 2007 Kahlil Hodgson
+#   Copyright (C) 2011 Adam Spiers
+#   and others.
+#
+# This file is part of Stow-Python.
+#
+# Stow-Python is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Stow-Python is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see https://www.gnu.org/licenses/.
+
+"""
+stow - manage farms of symbolic links
+
+SYNOPSIS:
+    stow [ options ] package ...
+
+DESCRIPTION:
+    Stow is a symlink farm manager which takes distinct sets of software
+    and/or data located in separate directories on the filesystem, and
+    makes them all appear to be installed in a single directory tree.
+"""
+
+from __future__ import print_function
+
+import errno as errno_module
+import os
+import pwd
+import re
+import shlex
+import shutil
+import stat
+import sys
+import traceback
+
+VERSION = '2.4.1'
+ProgramName = 'stow'
+
+
+##############################################################################
+#
+# From Stow/Util.pm
+#
+##############################################################################
+
+
+# Track the last errno from filesystem operations.
+# This mimics Perl's $! behavior where file test operators set errno.
+_last_errno = 0
+
+#############################################################################
+#
+# General Utilities: nothing stow specific here.
+#
+#############################################################################
+
+
+def error(format_str, *args):
+    """
+    Outputs an error message in a consistent form and then dies.
+
+    Mimics Perl's die() behavior: if errno ($!) is non-zero,
+    the exit code is the errno value. Otherwise exits with 255.
+    """
+    global _last_errno
+    if args:
+        msg = format_str % args
+    else:
+        msg = format_str
+    sys.stderr.write("%s: ERROR: %s\n" % (ProgramName, msg))
+    # Perl's die() uses $! as exit code if non-zero, otherwise 255
+    if _last_errno != 0:
+        exit_code = _last_errno
+        _last_errno = 0  # Reset after use
+    else:
+        exit_code = 255
+    sys.exit(exit_code)
+
+
+def is_a_directory(path):
+    """
+    Check if path is a directory, setting errno like Perl's -d operator.
+
+    Returns True if path is a directory, False otherwise.
+    Sets _last_errno to the errno if the stat fails.
+    """
+    global _last_errno
+    try:
+        stat_result = os.stat(path)
+        if stat.S_ISDIR(stat_result.st_mode):
+            _last_errno = 0
+            return True
+        else:
+            _last_errno = errno_module.ENOTDIR
+            return False
+    except OSError as e:
+        _last_errno = e.errno
+        return False
+
+
+debug_level = 0
+
+
+def set_debug_level(level):
+    """
+    Sets verbosity level for debug().
+    """
+    global debug_level
+    debug_level = level
+
+
+test_mode = False
+
+
+def set_test_mode(on_or_off):
+    """
+    Sets testmode on or off.
+    """
+    global test_mode
+    if on_or_off:
+        test_mode = True
+    else:
+        test_mode = False
+
+
+def debug(level, *args):
+    """
+    Logs to STDERR based on debug_level setting. level is the
+    minimum verbosity level required to output msg. All output is to
+    STDERR to preserve backward compatibility, except for in test mode,
+    when STDOUT is used instead. In test mode, the verbosity can be
+    overridden via the TEST_VERBOSE environment variable.
+
+    Verbosity rules:
+        0: errors only
+        >= 1: print operations: LINK/UNLINK/MKDIR/RMDIR/MV
+        >= 2: print operation exceptions
+              e.g. "_this_ already points to _that_", skipping, deferring,
+              overriding, fixing invalid links
+        >= 3: print trace detail: trace: stow/unstow/package/contents/node
+        >= 4: debug helper routines
+        >= 5: debug ignore lists
+
+    Supports two calling conventions for backwards compatibility:
+        debug(level, msg)
+        debug(level, indent_level, msg)
+    """
+    # Maintain backwards-compatibility in case anyone's relying on this.
+    # If second arg is a number, it's the indent level
+    if len(args) >= 2 and isinstance(args[0], int):
+        indent_level = args[0]
+        msg = args[1]
+    elif len(args) >= 1:
+        indent_level = 0
+        msg = args[0]
+    else:
+        return
+
+    if debug_level >= level:
+        indent = '    ' * indent_level
+        if test_mode:
+            print("# %s%s" % (indent, msg))
+        else:
+            sys.stderr.write("%s%s\n" % (indent, msg))
+
+
+def join_paths(*paths):
+    """
+    Concatenates given paths.
+
+    Factors out some redundant path elements:
+    '//' => '/', and 'a/b/../c' => 'a/c'. We need this function
+    with this behaviour, even though b could be a symlink to
+    elsewhere. This behaviour is deliberately different to
+    canon_path(), because the way join_paths() is used
+    relies on this. Firstly, there is no guarantee that the paths
+    exist, so a filesystem check is inappropriate.
+
+    For example, it's used to determine the path from the target
+    directory to a symlink destination. So if a symlink
+    path/to/target/a/b/c points to ../../../stow/pkg/a/b/c,
+    then joining path/to/target/a/b with ../../../stow/pkg/a/b/c
+    yields path/to/stow/pkg/a/b/c, and it's crucial that the
+    path/to/stow prefix matches a recognisable stow directory.
+    """
+    debug(5, 5, "| Joining: %s" % ' '.join(paths))
+    result = ''
+    for part in paths:
+        if not part:  # probably shouldn't happen?
+            continue
+        # Apply canonpath-like normalization
+        part = _canonpath(part)
+
+        if part.startswith('/'):
+            result = part  # absolute path, so ignore all previous parts
+        else:
+            if result and result != '/':
+                result += '/'
+            result += part
+        debug(7, 6, "| Join now: %s" % result)
+
+    debug(6, 5, "| Joined: %s" % result)
+
+    # Need this to remove any initial ./
+    result = _canonpath(result)
+
+    # remove foo/..
+    # Pattern: (^|/)(?!\.\.)[^/]+/\.\.(/|$)
+    # This removes "something/.." where "something" is not ".."
+    while True:
+        new_result = re.sub(r'(^|/)(?!\.\.)[^/]+/\.\.(/|$)', r'\1', result)
+        if new_result == result:
+            break
+        result = new_result
+    debug(6, 5, "| After .. removal: %s" % result)
+
+    result = _canonpath(result)
+    debug(5, 5, "| Final join: %s" % result)
+
+    return result
+
+
+def _canonpath(path):
+    """
+    Mimics Perl's File::Spec->canonpath() behavior.
+    Cleans up a path by removing redundant separators and up-level references.
+    Does NOT resolve symlinks or check if path exists.
+    """
+    if not path:
+        return path
+
+    # Remove duplicate slashes
+    path = re.sub(r'/+', '/', path)
+
+    # Remove trailing slash (unless it's just "/")
+    if len(path) > 1 and path.endswith('/'):
+        path = path[:-1]
+
+    # Remove leading ./ (but not just ".")
+    path = re.sub(r'^\./', '', path)
+
+    # Remove /. at the end
+    path = re.sub(r'/\.$', '', path)
+
+    # Remove /./ in the middle
+    path = re.sub(r'/\./', '/', path)
+
+    # If we ended up with empty string, return '.'
+    if not path:
+        path = '.'
+
+    return path
+
+
+def parent(*path_parts):
+    """
+    Find the parent of the given path.
+    Allows you to send multiple chunks of the path
+    (this feature is currently not used).
+
+    Mimics Perl: split m{/+}, $path; pop @elts; join '/', @elts
+    Perl's split preserves empty leading element for absolute paths
+    but drops trailing empty elements.
+    """
+    path = '/'.join(path_parts)
+    # Split on one or more slashes, like Perl's m{/+}
+    elts = re.split(r'/+', path)
+    # Perl's split drops trailing empty strings, Python's doesn't
+    while elts and elts[-1] == '':
+        elts.pop()
+    if elts:
+        elts.pop()
+    return '/'.join(elts)
+
+
+def canon_path(path):
+    """
+    Find absolute canonical path of given path.
+    Uses chdir() to resolve symlinks and relative paths.
+    """
+    cwd = os.getcwd()
+    try:
+        os.chdir(path)
+    except OSError:
+        error("canon_path: cannot chdir to %s from %s", path, cwd)
+    canon = os.getcwd()
+    restore_cwd(cwd)
+    return canon
+
+
+def restore_cwd(prev):
+    """
+    Restores previous working directory.
+    Dies if directory no longer exists.
+    """
+    try:
+        os.chdir(prev)
+    except OSError:
+        error("Your current directory %s seems to have vanished", prev)
+
+
+def adjust_dotfile(pkg_node):
+    """
+    Converts dot-X to .X for dotfiles mode.
+    Used when stowing with --dotfiles flag.
+    """
+    # Perl: (my $adjusted = $pkg_node) =~ s/^dot-([^.])/.$1/;
+    # Matches "dot-" followed by a character that is not a dot
+    match = re.match(r'^dot-([^.])', pkg_node)
+    if match:
+        return '.' + pkg_node[4:]
+    return pkg_node
+
+
+def unadjust_dotfile(target_node):
+    """
+    Reverse operation: .X to dot-X
+    Used during unstow with --compat and --dotfiles.
+    """
+    # Perl: return $target_node if $target_node =~ /^\.\.?$/;
+    if target_node == '.' or target_node == '..':
+        return target_node
+    # Perl: (my $adjusted = $target_node) =~ s/^\./dot-/;
+    if target_node.startswith('.'):
+        return 'dot-' + target_node[1:]
+    return target_node
+
+
+##############################################################################
+#
+# From Stow.pm
+#
+##############################################################################
+
+
+LOCAL_IGNORE_FILE = '.stow-local-ignore'
+GLOBAL_IGNORE_FILE = '.stow-global-ignore'
+
+# These are the default options for each Stow instance.
+DEFAULT_OPTIONS = {
+    'conflicts': 0,
+    'simulate': 0,
+    'verbose': 0,
+    'paranoid': 0,
+    'compat': 0,
+    'test_mode': 0,
+    'dotfiles': 0,
+    'adopt': 0,
+    'no-folding': 0,
+    'ignore': [],
+    'override': [],
+    'defer': [],
+}
+
+# Memoization cache for ignore file regexps
+_ignore_file_regexps = {}
+
+
+class Stow(object):
+    """
+    Stow class - manage farms of symbolic links
+
+    Required options:
+        dir - the stow directory
+        target - the target directory
+
+    N.B. This sets the current working directory to the target directory.
+    """
+
+    def __init__(self, **opts):
+        self.action_count = 0
+
+        # Check required arguments
+        for required_arg in ('dir', 'target'):
+            if required_arg not in opts:
+                raise ValueError(
+                    "Stow.__init__() called without '%s' parameter" % required_arg
+                )
+            setattr(self, required_arg, opts.pop(required_arg))
+
+        # Set options with defaults
+        # Note: 'ignore', 'defer', 'override' are stored with underscore prefix
+        # to avoid conflict with methods of the same name
+        for opt, default in DEFAULT_OPTIONS.items():
+            # These options conflict with method names, store with underscore prefix
+            if opt in ('ignore', 'defer', 'override'):
+                attr_name = '_' + opt
+            else:
+                attr_name = opt.replace('-', '_')
+
+            if opt in opts:
+                setattr(self, attr_name, opts.pop(opt))
+            else:
+                # Deep copy lists to avoid sharing between instances
+                if isinstance(default, list):
+                    setattr(self, attr_name, list(default))
+                else:
+                    setattr(self, attr_name, default)
+
+        if opts:
+            raise ValueError(
+                "Stow.__init__() called with unrecognised parameter(s): %s" %
+                ', '.join(opts.keys())
+            )
+
+        # Compile defer/override/ignore patterns into regex objects
+        # These are passed as string patterns but need to be compiled for .search()
+        self._defer = [re.compile(p) for p in self._defer]
+        self._override = [re.compile(p) for p in self._override]
+        self._ignore = [re.compile(p) for p in self._ignore]
+
+        set_debug_level(self.get_verbosity())
+        set_test_mode(self.test_mode)
+        self.set_stow_dir()
+        self.init_state()
+
+    def get_verbosity(self):
+        if not self.test_mode:
+            return self.verbose
+
+        test_verbose = os.environ.get('TEST_VERBOSE', '')
+        if not test_verbose:
+            return 0
+
+        # Convert TEST_VERBOSE=y into numeric value
+        try:
+            return int(test_verbose)
+        except ValueError:
+            return 3
+
+    def set_stow_dir(self, dir_path=None):
+        """
+        Sets a new stow directory. This allows the use of multiple stow
+        directories within one Stow instance.
+
+        If dir_path is omitted, uses the value of the 'dir' parameter passed
+        to the constructor.
+        """
+        if dir_path is not None:
+            self.dir = dir_path
+
+        stow_dir = canon_path(self.dir)
+        target = canon_path(self.target)
+
+        # Calculate relative path from target directory to stow directory.
+        # This will be commonly used as a prefix for constructing and
+        # recognising symlinks "installed" in the target directory which
+        # point to package files under the stow directory.
+        self.stow_path = os.path.relpath(stow_dir, target)
+
+        debug(2, 0, "stow dir is %s" % stow_dir)
+        debug(2, 0, "stow dir path relative to target %s is %s" % (target, self.stow_path))
+
+    def init_state(self):
+        """Initialize internal state structures."""
+        # Store conflicts during pre-processing
+        self.conflicts = {}
+        self.conflict_count = 0
+
+        # Store command line packages to stow (-S and -R)
+        self.pkgs_to_stow = []
+
+        # Store command line packages to unstow (-D and -R)
+        self.pkgs_to_delete = []
+
+        # The following structures are used by the abstractions that allow us to
+        # defer operating on the filesystem until after all potential conflicts have
+        # been assessed.
+
+        # self.tasks: list of operations to be performed (in order)
+        # each element is a dict of the form
+        #   {
+        #       'action': ...  ('create' or 'remove' or 'move')
+        #       'type':   ...  ('link' or 'dir' or 'file')
+        #       'path':   ...  (unique)
+        #       'source': ...  (only for links)
+        #       'dest':   ...  (only for moving files)
+        #   }
+        self.tasks = []
+
+        # self.dir_task_for: map a path to the corresponding directory task reference
+        # This structure allows us to quickly determine if a path has an existing
+        # directory task associated with it.
+        self.dir_task_for = {}
+
+        # self.link_task_for: map a path to the corresponding link task reference
+        # This structure allows us to quickly determine if a path has an existing
+        # link task associated with it.
+        self.link_task_for = {}
+
+        # N.B.: directory tasks and link tasks are NOT mutually exclusive due
+        # to tree splitting (which involves a remove link task followed by
+        # a create directory task).
+
+    #=========================================================================
+    # plan_unstow(@packages)
+    #
+    # Plan which symlink/directory creation/removal tasks need to be executed
+    # in order to unstow the given packages. Any potential conflicts are then
+    # accessible via get_conflicts().
+    #=========================================================================
+    def plan_unstow(self, *packages):
+        if not packages:
+            return
+
+        debug(2, 0, "Planning unstow of: %s ..." % ' '.join(packages))
+
+        def do_unstow():
+            for package in packages:
+                pkg_path = join_paths(self.stow_path, package)
+                if not is_a_directory(pkg_path):
+                    error("The stow directory %s does not contain package %s",
+                          self.stow_path, package)
+                debug(2, 0, "Planning unstow of package %s..." % package)
+                self.unstow_contents(
+                    package,
+                    '.',
+                    '.',
+                )
+                debug(2, 0, "Planning unstow of package %s... done" % package)
+                self.action_count += 1
+
+        self.within_target_do(do_unstow)
+
+    #=========================================================================
+    # plan_stow(@packages)
+    #
+    # Plan which symlink/directory creation/removal tasks need to be executed
+    # in order to stow the given packages. Any potential conflicts are then
+    # accessible via get_conflicts().
+    #=========================================================================
+    def plan_stow(self, *packages):
+        if not packages:
+            return
+
+        debug(2, 0, "Planning stow of: %s ..." % ' '.join(packages))
+
+        def do_stow():
+            for package in packages:
+                pkg_path = join_paths(self.stow_path, package)
+                if not is_a_directory(pkg_path):
+                    error("The stow directory %s does not contain package %s",
+                          self.stow_path, package)
+                debug(2, 0, "Planning stow of package %s..." % package)
+                self.stow_contents(
+                    self.stow_path,
+                    package,
+                    '.',
+                    '.',
+                )
+                debug(2, 0, "Planning stow of package %s... done" % package)
+                self.action_count += 1
+
+        self.within_target_do(do_stow)
+
+    #=========================================================================
+    # within_target_do(code)
+    #
+    # Execute code within target directory, preserving cwd.
+    # This is done to ensure that the consumer of the Stow interface doesn't
+    # have to worry about (a) what their cwd is, and (b) that their cwd
+    # might change.
+    #=========================================================================
+    def within_target_do(self, code):
+        cwd = os.getcwd()
+        try:
+            os.chdir(self.target)
+        except OSError as e:
+            error("Cannot chdir to target tree: %s (%s)", self.target, e)
+        debug(3, 0, "cwd now %s" % self.target)
+
+        code()
+
+        restore_cwd(cwd)
+        debug(3, 0, "cwd restored to %s" % cwd)
+
+    #=========================================================================
+    # stow_contents($stow_path, $package, $pkg_subdir, $target_subdir)
+    #
+    # Stow the contents of the given directory.
+    #
+    # $stow_path - Relative path from current (i.e. target) directory to
+    #              the stow dir containing the package to be stowed.
+    # $package - The package whose contents are being stowed.
+    # $pkg_subdir - Subdirectory of the installation image in the package
+    #               directory which needs stowing as a symlink.
+    # $target_subdir - Subdirectory of the target directory.
+    #
+    # stow_node() and stow_contents() are mutually recursive.
+    #=========================================================================
+    def stow_contents(self, stow_path, package, pkg_subdir, target_subdir):
+        if self.should_skip_target(pkg_subdir):
+            return
+
+        cwd = os.getcwd()
+        msg = "Stowing contents of %s / %s / %s (cwd=%s)" % (
+            stow_path, package, pkg_subdir, cwd
+        )
+        # Replace $HOME with ~ for readability
+        home = os.environ.get('HOME', '')
+        if home:
+            msg = msg.replace(home + '/', '~/')
+            msg = msg.replace(home, '~')
+        debug(3, 0, msg)
+        debug(4, 1, "target subdir is %s" % target_subdir)
+
+        # Calculate the path to the package directory or sub-directory
+        # whose contents need to be stowed, relative to the current
+        # (target directory). This is needed so that we can check it's a
+        # valid directory, and can read its contents to iterate over them.
+        pkg_path_from_cwd = join_paths(stow_path, package, pkg_subdir)
+
+        if not self.is_a_node(target_subdir):
+            error("stow_contents() called with non-directory target: %s", target_subdir)
+
+        try:
+            listing = os.listdir(pkg_path_from_cwd)
+        except OSError as e:
+            error("cannot read directory: %s (%s)", pkg_path_from_cwd, e)
+
+        for node in sorted(listing):
+            if node == '.' or node == '..':
+                continue
+
+            package_node_path = join_paths(pkg_subdir, node)
+            target_node = node
+            target_node_path = join_paths(target_subdir, target_node)
+
+            if self.ignore(stow_path, package, target_node_path):
+                continue
+
+            if self.dotfiles:
+                adjusted = adjust_dotfile(node)
+                if adjusted != node:
+                    debug(4, 1, "Adjusting: %s => %s" % (node, adjusted))
+                    target_node = adjusted
+                    target_node_path = join_paths(target_subdir, target_node)
+
+            self.stow_node(
+                stow_path,
+                package,
+                package_node_path,
+                target_node_path
+            )
+
+    #=========================================================================
+    # stow_node($stow_path, $package, $pkg_subpath, $target_subpath)
+    #
+    # Stow the given node.
+    #
+    # stow_node() and stow_contents() are mutually recursive.
+    #=========================================================================
+    def stow_node(self, stow_path, package, pkg_subpath, target_subpath):
+        debug(3, 0, "Stowing entry %s / %s / %s" % (stow_path, package, pkg_subpath))
+
+        # Calculate the path to the package directory or sub-directory
+        # whose contents need to be stowed, relative to the current
+        # (target directory).
+        pkg_path_from_cwd = join_paths(stow_path, package, pkg_subpath)
+
+        # Don't try to stow absolute symlinks (they can't be unstowed)
+        if os.path.islink(pkg_path_from_cwd):
+            link_dest = self.read_a_link(pkg_path_from_cwd)
+            if link_dest.startswith('/'):
+                self.conflict(
+                    'stow',
+                    package,
+                    "source is an absolute symlink %s => %s" % (pkg_path_from_cwd, link_dest)
+                )
+                debug(3, 0, "Absolute symlinks cannot be unstowed")
+                return
+
+        # How many directories deep are we?
+        level = pkg_subpath.count('/')
+        debug(2, 1, "level of %s is %d" % (pkg_subpath, level))
+
+        # Calculate the destination of the symlink which would need to be
+        # installed within this directory in the absence of folding.
+        link_dest = join_paths('../' * level, pkg_path_from_cwd)
+        debug(4, 1, "link destination %s" % link_dest)
+
+        # Does the target already exist?
+        if self.is_a_link(target_subpath):
+            # Where is the link pointing?
+            existing_link_dest = self.read_a_link(target_subpath)
+            if not existing_link_dest:
+                error("Could not read link: %s", target_subpath)
+            debug(4, 1, "Evaluate existing link: %s => %s" % (target_subpath, existing_link_dest))
+
+            # Does it point to a node under any stow directory?
+            existing_pkg_path_from_cwd, existing_stow_path, existing_package = \
+                self.find_stowed_path(target_subpath, existing_link_dest)
+
+            if not existing_pkg_path_from_cwd:
+                self.conflict(
+                    'stow',
+                    package,
+                    "existing target is not owned by stow: %s" % target_subpath
+                )
+                return
+
+            # Does the existing $target_subpath actually point to anything?
+            if self.is_a_node(existing_pkg_path_from_cwd):
+                if existing_link_dest == link_dest:
+                    debug(2, 0, "--- Skipping %s as it already points to %s"
+                          % (target_subpath, link_dest))
+                elif self.defer(target_subpath):
+                    debug(2, 0, "--- Deferring installation of: %s" % target_subpath)
+                elif self.override(target_subpath):
+                    debug(2, 0, "--- Overriding installation of: %s" % target_subpath)
+                    self.do_unlink(target_subpath)
+                    self.do_link(link_dest, target_subpath)
+                elif (self.is_a_dir(join_paths(parent(target_subpath),
+                                               existing_link_dest))
+                      and self.is_a_dir(join_paths(parent(target_subpath),
+                                                   link_dest))):
+                    # If the existing link points to a directory,
+                    # and the proposed new link points to a directory,
+                    # then we can unfold (split open) the tree at that point
+
+                    debug(2, 0, "--- Unfolding %s which was already owned by %s"
+                          % (target_subpath, existing_package))
+                    self.do_unlink(target_subpath)
+                    self.do_mkdir(target_subpath)
+                    self.stow_contents(
+                        existing_stow_path,
+                        existing_package,
+                        pkg_subpath,
+                        target_subpath,
+                    )
+                    self.stow_contents(
+                        self.stow_path,
+                        package,
+                        pkg_subpath,
+                        target_subpath,
+                    )
+                else:
+                    self.conflict(
+                        'stow',
+                        package,
+                        "existing target is stowed to a different package: %s => %s" % (
+                            target_subpath, existing_link_dest
+                        )
+                    )
+            else:
+                # The existing link is invalid, so replace it with a good link
+                debug(2, 0, "--- replacing invalid link: %s" % target_subpath)
+                self.do_unlink(target_subpath)
+                self.do_link(link_dest, target_subpath)
+
+        elif self.is_a_node(target_subpath):
+            debug(4, 1, "Evaluate existing node: %s" % target_subpath)
+            if self.is_a_dir(target_subpath):
+                if not os.path.isdir(pkg_path_from_cwd):
+                    # FIXME: why wasn't this ever needed before?
+                    self.conflict(
+                        'stow',
+                        package,
+                        "cannot stow non-directory %s over existing directory target %s" % (
+                            pkg_path_from_cwd, target_subpath
+                        )
+                    )
+                else:
+                    self.stow_contents(
+                        self.stow_path,
+                        package,
+                        pkg_subpath,
+                        target_subpath,
+                    )
+            else:
+                # If we're here, $target_subpath is not a current or
+                # planned directory.
+                if self.adopt:
+                    if os.path.isdir(pkg_path_from_cwd):
+                        self.conflict(
+                            'stow',
+                            package,
+                            "cannot stow directory %s over existing non-directory target %s" % (
+                                pkg_path_from_cwd, target_subpath
+                            )
+                        )
+                    else:
+                        self.do_mv(target_subpath, pkg_path_from_cwd)
+                        self.do_link(link_dest, target_subpath)
+                else:
+                    self.conflict(
+                        'stow',
+                        package,
+                        "cannot stow %s over existing target %s since neither "
+                        "a link nor a directory and --adopt not specified"
+                        % (pkg_path_from_cwd, target_subpath)
+                    )
+
+        elif (self.no_folding and os.path.isdir(pkg_path_from_cwd)
+              and not os.path.islink(pkg_path_from_cwd)):
+            self.do_mkdir(target_subpath)
+            self.stow_contents(
+                self.stow_path,
+                package,
+                pkg_subpath,
+                target_subpath,
+            )
+        else:
+            self.do_link(link_dest, target_subpath)
+
+        return
+
+    #=========================================================================
+    # should_skip_target($target_subdir)
+    #
+    # Determine whether $target_subdir is a stow directory which should
+    # not be stowed to or unstowed from. This mechanism protects stow
+    # directories from being altered by stow.
+    #
+    # Returns true iff target is a stow directory.
+    # cwd must be the top-level target directory.
+    #=========================================================================
+    def should_skip_target(self, target):
+        # Don't try to remove anything under a stow directory
+        if target == self.stow_path:
+            sys.stderr.write("WARNING: skipping target which was current "
+                             "stow directory %s\n" % target)
+            return True
+
+        if self.marked_stow_dir(target):
+            sys.stderr.write("WARNING: skipping marked Stow directory %s\n" % target)
+            return True
+
+        nonstow_file = join_paths(target, ".nonstow")
+        if os.path.exists(nonstow_file):
+            sys.stderr.write("WARNING: skipping protected directory %s\n" % target)
+            return True
+
+        debug(4, 1, "%s not protected; shouldn't skip" % target)
+        return False
+
+    def marked_stow_dir(self, dir_path):
+        """Check if directory contains .stow marker file."""
+        stow_file = join_paths(dir_path, ".stow")
+        if os.path.exists(stow_file):
+            debug(5, 5, "> %s contained .stow" % dir_path)
+            return True
+        return False
+
+    #=========================================================================
+    # unstow_contents($package, $pkg_subdir, $target_subdir)
+    #
+    # Unstow the contents of the given directory.
+    #
+    # unstow_node() and unstow_contents() are mutually recursive.
+    # Here we traverse the package tree, rather than the target tree.
+    #=========================================================================
+    def unstow_contents(self, package, pkg_subdir, target_subdir):
+        if self.should_skip_target(target_subdir):
+            return
+
+        cwd = os.getcwd()
+        compat_str = ', compat' if self.compat else ''
+        msg = "Unstowing contents of %s / %s / %s (cwd=%s%s)" % (
+            self.stow_path, package, pkg_subdir, cwd, compat_str
+        )
+        home = os.environ.get('HOME', '')
+        if home:
+            msg = msg.replace(home + '/', '~/')
+        debug(3, 0, msg)
+        debug(4, 1, "target subdir is %s" % target_subdir)
+
+        # Calculate the path to the package directory or sub-directory
+        # whose contents need to be unstowed, relative to the current
+        # (target directory).
+        pkg_path_from_cwd = join_paths(self.stow_path, package, pkg_subdir)
+
+        if self.compat:
+            # In compat mode we traverse the target tree not the source tree,
+            # so we're unstowing the contents of /target/foo, there's no
+            # guarantee that the corresponding /stow/mypkg/foo exists.
+            if not os.path.isdir(target_subdir):
+                error("unstow_contents() in compat mode called with non-directory target: %s",
+                      target_subdir)
+        else:
+            # We traverse the package installation image tree not the
+            # target tree, so $pkg_path_from_cwd must exist.
+            if not os.path.isdir(pkg_path_from_cwd):
+                error("unstow_contents() called with non-directory path: %s",
+                      pkg_path_from_cwd)
+
+            # When called at the top level, $target_subdir should exist. And
+            # unstow_node() should only call this via mutual recursion if
+            # $target_subdir exists.
+            if not self.is_a_node(target_subdir):
+                error("unstow_contents() called with invalid target: %s",
+                      target_subdir)
+
+        dir_to_read = target_subdir if self.compat else pkg_path_from_cwd
+        try:
+            listing = os.listdir(dir_to_read)
+        except OSError as e:
+            error("cannot read directory: %s (%s)", dir_to_read, e)
+
+        for node in sorted(listing):
+            if node == '.' or node == '..':
+                continue
+
+            package_node = node
+            target_node = node
+            target_node_path = join_paths(target_subdir, target_node)
+
+            if self.ignore(self.stow_path, package, target_node_path):
+                continue
+
+            if self.dotfiles:
+                if self.compat:
+                    # $node is in the target tree, so we need to reverse
+                    # adjust any .* files in case they came from a dot-*
+                    # file.
+                    adjusted = unadjust_dotfile(node)
+                    if adjusted != node:
+                        debug(4, 1, "Reverse adjusting: %s => %s" % (node, adjusted))
+                        package_node = adjusted
+                else:
+                    # $node is in the package tree, so adjust any dot-*
+                    # files for the target.
+                    adjusted = adjust_dotfile(node)
+                    if adjusted != node:
+                        debug(4, 1, "Adjusting: %s => %s" % (node, adjusted))
+                        target_node = adjusted
+                        target_node_path = join_paths(target_subdir, target_node)
+
+            package_node_path = join_paths(pkg_subdir, package_node)
+
+            self.unstow_node(
+                package,
+                package_node_path,
+                target_node_path
+            )
+
+        if not self.compat and os.path.isdir(target_subdir):
+            self.cleanup_invalid_links(target_subdir)
+
+    #=========================================================================
+    # unstow_node($package, $pkg_subpath, $target_subpath)
+    #
+    # Unstow the given node.
+    #
+    # unstow_node() and unstow_contents() are mutually recursive.
+    #=========================================================================
+    def unstow_node(self, package, pkg_subpath, target_subpath):
+        debug(3, 0, "Unstowing entry from target: %s" % target_subpath)
+        debug(4, 1, "Package entry: %s / %s / %s" % (self.stow_path, package, pkg_subpath))
+
+        # Does the target exist?
+        if self.is_a_link(target_subpath):
+            self.unstow_link_node(package, pkg_subpath, target_subpath)
+        elif os.path.isdir(target_subpath):
+            self.unstow_contents(package, pkg_subpath, target_subpath)
+
+            # This action may have made the parent directory foldable
+            parent_in_pkg = self.foldable(target_subpath)
+            if parent_in_pkg:
+                self.fold_tree(target_subpath, parent_in_pkg)
+        elif os.path.exists(target_subpath):
+            debug(2, 1, "%s doesn't need to be unstowed" % target_subpath)
+        else:
+            debug(2, 1, "%s did not exist to be unstowed" % target_subpath)
+
+    def unstow_link_node(self, package, pkg_subpath, target_subpath):
+        debug(4, 2, "Evaluate existing link: %s" % target_subpath)
+
+        # Where is the link pointing?
+        link_dest = self.read_a_link(target_subpath)
+        if not link_dest:
+            error("Could not read link: %s", target_subpath)
+
+        if link_dest.startswith('/'):
+            sys.stderr.write("Ignoring an absolute symlink: %s => %s\n"
+                             % (target_subpath, link_dest))
+            return
+
+        # Does it point to a node under any stow directory?
+        existing_pkg_path_from_cwd, existing_stow_path, existing_package = \
+            self.find_stowed_path(target_subpath, link_dest)
+
+        if not existing_pkg_path_from_cwd:
+            # The user is unstowing the package, so they don't want links to it.
+            # Therefore we should allow them to have a link pointing elsewhere
+            # which would conflict with the package if they were stowing it.
+            debug(5, 3, "Ignoring unowned link %s => %s" % (target_subpath, link_dest))
+            return
+
+        pkg_path_from_cwd = join_paths(self.stow_path, package, pkg_subpath)
+
+        # Does the existing $target_subpath actually point to anything?
+        if os.path.exists(existing_pkg_path_from_cwd):
+            if existing_pkg_path_from_cwd == pkg_path_from_cwd:
+                # It points to the package we're unstowing, so unstow the link.
+                self.do_unlink(target_subpath)
+            else:
+                debug(5, 3, "Ignoring link %s => %s" % (target_subpath, link_dest))
+        else:
+            debug(2, 0, "--- removing invalid link into a stow directory: %s" % pkg_path_from_cwd)
+            self.do_unlink(target_subpath)
+
+    #=========================================================================
+    # link_owned_by_package($target_subpath, $link_dest)
+    #
+    # Determine whether the given link points to a member of a stowed
+    # package.
+    #
+    # Lossy wrapper around find_stowed_path().
+    # Returns the package iff link is owned by stow, otherwise ''.
+    #=========================================================================
+    def link_owned_by_package(self, target_subpath, link_dest):
+        pkg_path_from_cwd, stow_path, package = \
+            self.find_stowed_path(target_subpath, link_dest)
+        return package
+
+    #=========================================================================
+    # find_stowed_path($target_subpath, $link_dest)
+    #
+    # Determine whether the given symlink within the target directory is a
+    # stowed path pointing to a member of a package under the stow dir.
+    #
+    # Returns ($pkg_path_from_cwd, $stow_path, $package) or ('', '', '').
+    #=========================================================================
+    def find_stowed_path(self, target_subpath, link_dest):
+        if link_dest.startswith('/'):
+            # Symlink points to an absolute path, therefore it cannot be
+            # owned by Stow.
+            return ('', '', '')
+
+        # Evaluate softlink relative to its target, without relying on
+        # what's actually on the filesystem, since the link might not
+        # exist yet.
+        debug(4, 2, "find_stowed_path(target=%s; source=%s)" % (target_subpath, link_dest))
+        pkg_path_from_cwd = join_paths(parent(target_subpath), link_dest)
+        debug(4, 3, "is symlink destination %s owned by stow?" % pkg_path_from_cwd)
+
+        # First check whether the link is owned by the current stow
+        # directory, in which case $pkg_path_from_cwd will be a prefix of
+        # $self.stow_path.
+        package, pkg_subpath = self.link_dest_within_stow_dir(pkg_path_from_cwd)
+        if package:
+            debug(4, 3, "yes - package %s in %s may contain %s"
+                  % (package, self.stow_path, pkg_subpath))
+            return (pkg_path_from_cwd, self.stow_path, package)
+
+        # If no .stow file was found, we need to find out whether it's
+        # owned by the current stow directory, in which case
+        # $pkg_path_from_cwd will be a prefix of $self.stow_path.
+        stow_path, ext_package = self.find_containing_marked_stow_dir(pkg_path_from_cwd)
+        if stow_path:
+            debug(5, 5, "yes - %s in %s was marked as a stow dir; package=%s" % (
+                stow_path, pkg_path_from_cwd, ext_package
+            ))
+            return (pkg_path_from_cwd, stow_path, ext_package)
+
+        return ('', '', '')
+
+    #=========================================================================
+    # link_dest_within_stow_dir($link_dest)
+    #
+    # Detect whether symlink destination is within current stow dir.
+    #
+    # Returns ($package, $pkg_subpath) - package within the current stow
+    # dir and subpath within that package which the symlink points to.
+    #=========================================================================
+    def link_dest_within_stow_dir(self, link_dest):
+        debug(4, 4, "common prefix? link_dest=%s; stow_path=%s" % (link_dest, self.stow_path))
+
+        prefix = self.stow_path + '/'
+        if not link_dest.startswith(prefix):
+            debug(4, 3, "no - %s not under %s" % (link_dest, self.stow_path))
+            return ('', '')
+
+        remaining = link_dest[len(prefix):]
+        debug(4, 4, "remaining after removing %s: %s" % (self.stow_path, remaining))
+
+        parts = remaining.split('/')
+        package = parts[0] if parts else ''
+        pkg_subpath = '/'.join(parts[1:]) if len(parts) > 1 else ''
+        return (package, pkg_subpath)
+
+    #=========================================================================
+    # find_containing_marked_stow_dir($pkg_path_from_cwd)
+    #
+    # Detect whether path is within a marked stow directory.
+    #
+    # Returns ($stow_path, $package) or ('', '').
+    #=========================================================================
+    def find_containing_marked_stow_dir(self, pkg_path_from_cwd):
+        # Search for .stow files - this allows us to detect links
+        # owned by stow directories other than the current one.
+        segments = pkg_path_from_cwd.split('/')
+        segments = [s for s in segments if s]  # Remove empty segments
+
+        for last_segment in range(len(segments)):
+            path_so_far = '/'.join(segments[:last_segment + 1])
+            debug(5, 5, "is %s marked stow dir?" % path_so_far)
+            if self.marked_stow_dir(path_so_far):
+                if last_segment == len(segments) - 1:
+                    # This should probably never happen. Even if it did,
+                    # there would be no way of calculating $package.
+                    internal_error("find_stowed_path() called directly on stow dir")
+
+                package = segments[last_segment + 1]
+                return (path_so_far, package)
+
+        return ('', '')
+
+    #=========================================================================
+    # cleanup_invalid_links($dir)
+    #
+    # Clean up orphaned links that may block folding.
+    #
+    # This is invoked by unstow_contents(). We only clean up links which
+    # are both orphaned and owned by Stow.
+    #=========================================================================
+    def cleanup_invalid_links(self, dir_path):
+        cwd = os.getcwd()
+        debug(2, 0, "Cleaning up any invalid links in %s (pwd=%s)" % (dir_path, cwd))
+
+        if not os.path.isdir(dir_path):
+            internal_error("cleanup_invalid_links() called with a non-directory: %s" % dir_path)
+
+        try:
+            listing = os.listdir(dir_path)
+        except OSError as e:
+            error("cannot read directory: %s (%s)", dir_path, e)
+
+        for node in sorted(listing):
+            if node == '.' or node == '..':
+                continue
+
+            node_path = join_paths(dir_path, node)
+
+            if not os.path.islink(node_path):
+                continue
+
+            debug(4, 1, "Checking validity of link %s" % node_path)
+
+            if node_path in self.link_task_for:
+                action = self.link_task_for[node_path]['action']
+                if action != 'remove':
+                    sys.stderr.write("Unexpected action %s scheduled for %s; "
+                                     "skipping clean-up\n" % (action, node_path))
+                else:
+                    debug(4, 2, "%s scheduled for removal; skipping clean-up" % node_path)
+                continue
+
+            # Where is the link pointing?
+            # (don't use read_a_link() here)
+            try:
+                link_dest = os.readlink(node_path)
+            except OSError:
+                error("Could not read link %s", node_path)
+
+            target_subpath = join_paths(dir_path, link_dest)
+            debug(4, 2, "join %s %s" % (dir_path, link_dest))
+
+            if os.path.exists(target_subpath):
+                debug(4, 2, "Link target %s exists at %s; skipping clean up"
+                      % (link_dest, target_subpath))
+                continue
+            else:
+                debug(4, 2, "Link target %s doesn't exist at %s" % (link_dest, target_subpath))
+
+            debug(3, 1,
+                  "Checking whether valid link %s -> %s is owned by stow" % (node_path, link_dest))
+
+            owner = self.link_owned_by_package(node_path, link_dest)
+            if owner:
+                # owned by stow
+                debug(2, 0, "--- removing link owned by %s: %s => %s" % (
+                    owner, node_path, join_paths(dir_path, link_dest)
+                ))
+                self.do_unlink(node_path)
+
+        return
+
+    #=========================================================================
+    # foldable($target_subdir)
+    #
+    # Determine whether a tree can be folded.
+    #
+    # Returns path to the parent dir iff the tree can be safely folded.
+    # The path returned is relative to the parent of $target_subdir.
+    #=========================================================================
+    def foldable(self, target_subdir):
+        debug(3, 2, "Is %s foldable?" % target_subdir)
+
+        if self.no_folding:
+            debug(3, 3, "Not foldable because --no-folding enabled")
+            return ''
+
+        try:
+            listing = os.listdir(target_subdir)
+        except OSError as e:
+            error('Cannot read directory "%s" (%s)\n', target_subdir, e)
+
+        # We want to see if all the symlinks in $target_subdir point to
+        # files under the same parent subdirectory in the package.
+        parent_in_pkg = ''
+
+        for node in sorted(listing):
+            if node == '.' or node == '..':
+                continue
+
+            target_node_path = join_paths(target_subdir, node)
+
+            # Skip nodes scheduled for removal
+            if not self.is_a_node(target_node_path):
+                continue
+
+            # If it's not a link then we can't fold its parent
+            if not self.is_a_link(target_node_path):
+                debug(3, 3, "Not foldable because %s not a link" % target_node_path)
+                return ''
+
+            # Where is the link pointing?
+            link_dest = self.read_a_link(target_node_path)
+            if not link_dest:
+                error("Could not read link %s", target_node_path)
+
+            new_parent = parent(link_dest)
+            if parent_in_pkg == '':
+                parent_in_pkg = new_parent
+            elif parent_in_pkg != new_parent:
+                debug(3, 3, "Not foldable because %s contains links to "
+                      "entries in both %s and %s"
+                      % (target_subdir, parent_in_pkg, new_parent))
+                return ''
+
+        if not parent_in_pkg:
+            debug(3, 3, "Not foldable because %s contains no links" % target_subdir)
+            return ''
+
+        # If we get here then all nodes inside $target_subdir are links,
+        # and those links point to nodes inside the same directory.
+
+        # chop of leading '..' to get the path to the common parent directory
+        # relative to the parent of our $target_subdir
+        if parent_in_pkg.startswith('../'):
+            parent_in_pkg = parent_in_pkg[3:]
+
+        # If the resulting path is owned by stow, we can fold it
+        if self.link_owned_by_package(target_subdir, parent_in_pkg):
+            debug(3, 3, "%s is foldable" % target_subdir)
+            return parent_in_pkg
+        else:
+            debug(3, 3, "%s is not foldable" % target_subdir)
+            return ''
+
+    #=========================================================================
+    # fold_tree($target_subdir, $pkg_subpath)
+    #
+    # Fold the given tree.
+    #
+    # Only called iff foldable() is true so we can remove some checks.
+    #=========================================================================
+    def fold_tree(self, target_subdir, pkg_subpath):
+        debug(3, 0, "--- Folding tree: %s => %s" % (target_subdir, pkg_subpath))
+
+        try:
+            listing = os.listdir(target_subdir)
+        except OSError as e:
+            error('Cannot read directory "%s" (%s)\n', target_subdir, e)
+
+        for node in sorted(listing):
+            if node == '.' or node == '..':
+                continue
+            node_path = join_paths(target_subdir, node)
+            if not self.is_a_node(node_path):
+                continue
+            self.do_unlink(node_path)
+
+        self.do_rmdir(target_subdir)
+        self.do_link(pkg_subpath, target_subdir)
+        return
+
+    #=========================================================================
+    # conflict($action, $package, $message)
+    #
+    # Handle conflicts in stow operations.
+    #=========================================================================
+    def conflict(self, action, package, message):
+        debug(2, 0, "CONFLICT when %sing %s: %s" % (action, package, message))
+
+        if action not in self.conflicts:
+            self.conflicts[action] = {}
+        if package not in self.conflicts[action]:
+            self.conflicts[action][package] = []
+
+        self.conflicts[action][package].append(message)
+        self.conflict_count += 1
+
+        return
+
+    #=========================================================================
+    # get_conflicts()
+    #
+    # Returns a nested dict of all potential conflicts discovered.
+    #=========================================================================
+    def get_conflicts(self):
+        return self.conflicts
+
+    #=========================================================================
+    # get_conflict_count()
+    #
+    # Returns the number of conflicts found.
+    #=========================================================================
+    def get_conflict_count(self):
+        return self.conflict_count
+
+    #=========================================================================
+    # get_tasks()
+    #
+    # Returns a list of all symlink/directory creation/removal tasks.
+    #=========================================================================
+    def get_tasks(self):
+        return self.tasks
+
+    #=========================================================================
+    # get_action_count()
+    #
+    # Returns the number of actions planned for this Stow instance.
+    #=========================================================================
+    def get_action_count(self):
+        return self.action_count
+
+    #=========================================================================
+    # ignore($stow_path, $package, $target)
+    #
+    # Determine if the given path matches a regex in our ignore list.
+    #
+    # Returns true iff the path should be ignored.
+    #=========================================================================
+    def ignore(self, stow_path, package, target):
+        if not target:
+            internal_error("Stow.ignore() called with empty target")
+
+        for suffix in self.ignore_list:
+            if suffix.search(target):
+                debug(4, 1, "Ignoring path %s due to --ignore=%s" % (target, suffix.pattern))
+                return True
+
+        package_dir = join_paths(stow_path, package)
+        path_regexp, segment_regexp = self.get_ignore_regexps(package_dir)
+
+        if path_regexp is not None:
+            debug(5, 2, "Ignore list regexp for paths:    /%s/" % path_regexp.pattern)
+        else:
+            debug(5, 2, "Ignore list regexp for paths:    none")
+
+        if segment_regexp is not None:
+            debug(5, 2, "Ignore list regexp for segments: /%s/" % segment_regexp.pattern)
+        else:
+            debug(5, 2, "Ignore list regexp for segments: none")
+
+        if path_regexp is not None and path_regexp.search('/' + target):
+            debug(4, 1, "Ignoring path /%s" % target)
+            return True
+
+        # Get basename
+        basename = target.rsplit('/', 1)[-1]
+        if segment_regexp is not None and segment_regexp.search(basename):
+            debug(4, 1, "Ignoring path segment %s" % basename)
+            return True
+
+        debug(5, 1, "Not ignoring %s" % target)
+        return False
+
+    # Property to access 'ignore' option as 'ignore_list' to avoid name clash
+    @property
+    def ignore_list(self):
+        return getattr(self, '_ignore', [])
+
+    @ignore_list.setter
+    def ignore_list(self, value):
+        self._ignore = value
+
+    def get_ignore_regexps(self, dir_path):
+        """Get ignore regexps for the given package directory."""
+        # N.B. the local and global stow ignore files have to have different
+        # names so that:
+        #   1. the global one can be a symlink to within a stow
+        #      package, managed by stow itself, and
+        #   2. the local ones can be ignored via hardcoded logic in
+        #      compile_ignore_regexps(), so that they always stay within their stow packages.
+
+        local_stow_ignore = join_paths(dir_path, LOCAL_IGNORE_FILE)
+        home = os.environ.get('HOME', '')
+        global_stow_ignore = join_paths(home, GLOBAL_IGNORE_FILE) if home else ''
+
+        for file_path in (local_stow_ignore, global_stow_ignore):
+            if file_path and os.path.exists(file_path):
+                debug(5, 1, "Using ignore file: %s" % file_path)
+                return self.get_ignore_regexps_from_file(file_path)
+            else:
+                debug(5, 1, "%s didn't exist" % file_path)
+
+        debug(4, 1, "Using built-in ignore list")
+        return self.get_default_global_ignore_regexps()
+
+    def get_ignore_regexps_from_file(self, file_path):
+        """Get ignore regexps from a file, with memoization."""
+        if file_path in _ignore_file_regexps:
+            debug(4, 2, "Using memoized regexps from %s" % file_path)
+            return _ignore_file_regexps[file_path]
+
+        try:
+            with open(file_path, 'r') as f:
+                regexps = self.get_ignore_regexps_from_fh(f)
+        except IOError as e:
+            debug(4, 2, "Failed to open %s: %s" % (file_path, e))
+            return (None, None)
+
+        _ignore_file_regexps[file_path] = regexps
+        return regexps
+
+    def invalidate_memoized_regexp(self, file_path):
+        """
+        For efficiency of performance, regular expressions are compiled from
+        each ignore list file the first time it is used by the Stow process,
+        and then memoized for future use. If you expect the contents of these
+        files to change during a single run, you will need to invalidate the
+        memoized value from this cache. This method allows you to do that.
+        """
+        if file_path in _ignore_file_regexps:
+            debug(4, 2, "Invalidated memoized regexp for %s" % file_path)
+            del _ignore_file_regexps[file_path]
+        else:
+            debug(2, 1, "WARNING: no memoized regexp for %s to invalidate" % file_path)
+
+    def get_ignore_regexps_from_fh(self, fh):
+        """Parse ignore patterns from a file handle."""
+        regexps = {}
+
+        for line in fh:
+            line = line.rstrip('\n\r')
+            line = line.lstrip()
+            line = line.rstrip()
+
+            # Skip comments and empty lines
+            if line.startswith('#') or len(line) == 0:
+                continue
+
+            # Strip comments to right of pattern
+            line = re.sub(r'\s+#.+', '', line)
+            # Handle escaped hash
+            line = line.replace('\\#', '#')
+
+            regexps[line] = regexps.get(line, 0) + 1
+
+        # Local ignore lists should *always* stay within the stow directory,
+        # because this is the only place stow looks for them.
+        local_ignore_pattern = '^/' + re.escape(LOCAL_IGNORE_FILE) + '$'
+        regexps[local_ignore_pattern] = regexps.get(local_ignore_pattern, 0) + 1
+
+        return self.compile_ignore_regexps(regexps)
+
+    def compile_ignore_regexps(self, regexps):
+        """Compile ignore patterns into path and segment regexps."""
+        segment_regexps = []
+        path_regexps = []
+
+        for regexp in regexps.keys():
+            if '/' not in regexp:
+                # No / found in regexp, so use it for matching against basename
+                segment_regexps.append(regexp)
+            else:
+                # / found in regexp, so use it for matching against full path
+                path_regexps.append(regexp)
+
+        segment_regexp = None
+        path_regexp = None
+
+        if segment_regexps:
+            combined = '|'.join(segment_regexps)
+            segment_regexp = self.compile_regexp('^(%s)$' % combined)
+
+        if path_regexps:
+            combined = '|'.join(path_regexps)
+            path_regexp = self.compile_regexp('(^|/)(%s)(/|$)' % combined)
+
+        return (path_regexp, segment_regexp)
+
+    def compile_regexp(self, regexp):
+        """Compile a single regexp pattern."""
+        try:
+            return re.compile(regexp)
+        except re.error as e:
+            # Perl uses die() which raises an exception that can be caught
+            raise RuntimeError("Failed to compile regexp: %s" % e)
+
+    def get_default_global_ignore_regexps(self):
+        """
+        Get default global ignore regexps.
+
+        Bootstrap issue - first time we stow, we will be stowing
+        .cvsignore so it might not exist in ~ yet, or if it does, it could
+        be an old version missing the entries we need. So we make sure
+        they are there by hardcoding some crucial entries.
+        """
+        # Default ignore patterns from Stow.pm __DATA__ section
+        default_patterns = """
+# Comments and blank lines are allowed.
+
+RCS
+.+,v
+
+CVS
+\\.\\#.+       # CVS conflict files / emacs lock files
+\\.cvsignore
+
+\\.svn
+_darcs
+\\.hg
+
+\\.git
+\\.gitignore
+\\.gitmodules
+
+.+~          # emacs backup files
+\\#.*\\#       # emacs autosave files
+
+^/README.*
+^/LICENSE.*
+^/COPYING
+"""
+        regexps = {}
+        for line in default_patterns.strip().split('\n'):
+            line = line.strip()
+            if line.startswith('#') or len(line) == 0:
+                continue
+            # Strip comments to right of pattern
+            line = re.sub(r'\s+#.+', '', line)
+            line = line.replace('\\#', '#')
+            regexps[line] = regexps.get(line, 0) + 1
+
+        # Local ignore file pattern
+        local_ignore_pattern = '^/' + re.escape(LOCAL_IGNORE_FILE) + '$'
+        regexps[local_ignore_pattern] = regexps.get(local_ignore_pattern, 0) + 1
+
+        return self.compile_ignore_regexps(regexps)
+
+    #=========================================================================
+    # defer($path)
+    #
+    # Determine if the given path matches a regex in our defer list.
+    #
+    # Returns boolean.
+    #=========================================================================
+    def defer(self, path):
+        for prefix in self.defer_list:
+            if prefix.search(path):
+                return True
+        return False
+
+    @property
+    def defer_list(self):
+        return getattr(self, '_defer', [])
+
+    @defer_list.setter
+    def defer_list(self, value):
+        self._defer = value
+
+    #=========================================================================
+    # override($path)
+    #
+    # Determine if the given path matches a regex in our override list.
+    #
+    # Returns boolean.
+    #=========================================================================
+    def override(self, path):
+        for regex in self.override_list:
+            if regex.search(path):
+                return True
+        return False
+
+    @property
+    def override_list(self):
+        return getattr(self, '_override', [])
+
+    @override_list.setter
+    def override_list(self, value):
+        self._override = value
+
+    ##########################################################################
+    #
+    # The following code provides the abstractions that allow us to defer
+    # operating on the filesystem until after all potential conflicts have
+    # been assessed.
+    #
+    ##########################################################################
+
+    #=========================================================================
+    # process_tasks()
+    #
+    # Process each task in the tasks list.
+    #=========================================================================
+    def process_tasks(self):
+        debug(2, 0, "Processing tasks...")
+
+        # Strip out all tasks with a skip action
+        self.tasks = [t for t in self.tasks if t['action'] != 'skip']
+
+        if not self.tasks:
+            return
+
+        def do_process():
+            for task in self.tasks:
+                self.process_task(task)
+
+        self.within_target_do(do_process)
+
+        debug(2, 0, "Processing tasks... done")
+
+    #=========================================================================
+    # process_task($task)
+    #
+    # Process a single task.
+    #
+    # Must run from within target directory. Task involve either creating
+    # or deleting dirs and symlinks. An action is set to 'skip' if it is
+    # found to be redundant.
+    #=========================================================================
+    def process_task(self, task):
+        if task['action'] == 'create':
+            if task['type'] == 'dir':
+                try:
+                    os.mkdir(task['path'], 0o777)
+                except OSError as e:
+                    error("Could not create directory: %s (%s)", task['path'], e)
+                return
+            elif task['type'] == 'link':
+                try:
+                    os.symlink(task['source'], task['path'])
+                except OSError as e:
+                    error("Could not create symlink: %s => %s (%s)",
+                          task['path'], task['source'], e)
+                return
+
+        elif task['action'] == 'remove':
+            if task['type'] == 'dir':
+                try:
+                    os.rmdir(task['path'])
+                except OSError as e:
+                    error("Could not remove directory: %s (%s)", task['path'], e)
+                return
+            elif task['type'] == 'link':
+                try:
+                    os.unlink(task['path'])
+                except OSError as e:
+                    error("Could not remove link: %s (%s)", task['path'], e)
+                return
+
+        elif task['action'] == 'move':
+            if task['type'] == 'file':
+                # shutil.move() not good enough, since the stow directory
+                # might be on a different filesystem to the target.
+                try:
+                    shutil.move(task['path'], task['dest'])
+                except (IOError, OSError) as e:
+                    error("Could not move %s -> %s (%s)", task['path'], task['dest'], e)
+                return
+
+        # Should never happen.
+        internal_error("bad task action: %s" % task['action'])
+
+    #=========================================================================
+    # link_task_action($path)
+    #
+    # Finds the link task action for the given path, if there is one.
+    #
+    # Returns 'remove', 'create', or '' if there is no action.
+    #=========================================================================
+    def link_task_action(self, path):
+        if path not in self.link_task_for:
+            debug(4, 4, "| link_task_action(%s): no task" % path)
+            return ''
+
+        action = self.link_task_for[path]['action']
+        if action not in ('remove', 'create'):
+            internal_error("bad task action: %s" % action)
+
+        debug(4, 1, "link_task_action(%s): link task exists with action %s" % (path, action))
+        return action
+
+    #=========================================================================
+    # dir_task_action($path)
+    #
+    # Finds the dir task action for the given path, if there is one.
+    #
+    # Returns 'remove', 'create', or '' if there is no action.
+    #=========================================================================
+    def dir_task_action(self, path):
+        if path not in self.dir_task_for:
+            debug(4, 4, "| dir_task_action(%s): no task" % path)
+            return ''
+
+        action = self.dir_task_for[path]['action']
+        if action not in ('remove', 'create'):
+            internal_error("bad task action: %s" % action)
+
+        debug(4, 4, "| dir_task_action(%s): dir task exists with action %s" % (path, action))
+        return action
+
+    #=========================================================================
+    # parent_link_scheduled_for_removal($target_path)
+    #
+    # Determine whether the given path or any parent thereof is a link
+    # scheduled for removal.
+    #
+    # Returns boolean.
+    #=========================================================================
+    def parent_link_scheduled_for_removal(self, target_path):
+        prefix = ''
+        for part in target_path.split('/'):
+            if not part:
+                continue
+            prefix = join_paths(prefix, part)
+            debug(5, 4, "| parent_link_scheduled_for_removal(%s): prefix %s"
+                  % (target_path, prefix))
+            if (prefix in self.link_task_for
+                    and self.link_task_for[prefix]['action'] == 'remove'):
+                debug(4, 4, "| parent_link_scheduled_for_removal(%s): "
+                      "link scheduled for removal" % target_path)
+                return True
+
+        debug(4, 4, "| parent_link_scheduled_for_removal(%s): returning false" % target_path)
+        return False
+
+    #=========================================================================
+    # is_a_link($target_path)
+    #
+    # Determine if the given path is a current or planned link.
+    #
+    # Returns false if an existing link is scheduled for removal and true if
+    # a non-existent link is scheduled for creation.
+    #=========================================================================
+    def is_a_link(self, target_path):
+        debug(4, 2, "is_a_link(%s)" % target_path)
+
+        action = self.link_task_action(target_path)
+        if action:
+            if action == 'remove':
+                debug(4, 2, "is_a_link(%s): returning 0 (remove action found)" % target_path)
+                return False
+            elif action == 'create':
+                debug(4, 2, "is_a_link(%s): returning 1 (create action found)" % target_path)
+                return True
+
+        if os.path.islink(target_path):
+            # Check if any of its parent are links scheduled for removal
+            # (need this for edge case during unfolding)
+            debug(4, 2, "is_a_link(%s): is a real link" % target_path)
+            return not self.parent_link_scheduled_for_removal(target_path)
+
+        debug(4, 2, "is_a_link(%s): returning 0" % target_path)
+        return False
+
+    #=========================================================================
+    # is_a_dir($target_path)
+    #
+    # Determine if the given path is a current or planned directory.
+    #
+    # Returns false if an existing directory is scheduled for removal and
+    # true if a non-existent directory is scheduled for creation.
+    #=========================================================================
+    def is_a_dir(self, target_path):
+        debug(4, 1, "is_a_dir(%s)" % target_path)
+
+        action = self.dir_task_action(target_path)
+        if action:
+            if action == 'remove':
+                return False
+            elif action == 'create':
+                return True
+
+        if self.parent_link_scheduled_for_removal(target_path):
+            return False
+
+        if os.path.isdir(target_path):
+            debug(4, 1, "is_a_dir(%s): real dir" % target_path)
+            return True
+
+        debug(4, 1, "is_a_dir(%s): returning false" % target_path)
+        return False
+
+    #=========================================================================
+    # is_a_node($target_path)
+    #
+    # Determine whether the given path is a current or planned node.
+    #
+    # Returns false if an existing node is scheduled for removal, or true if
+    # a non-existent node is scheduled for creation.
+    #=========================================================================
+    def is_a_node(self, target_path):
+        debug(4, 4, "| Checking whether %s is a current/planned node" % target_path)
+
+        laction = self.link_task_action(target_path)
+        daction = self.dir_task_action(target_path)
+
+        if laction == 'remove':
+            if daction == 'remove':
+                internal_error("removing link and dir: %s" % target_path)
+                return False
+            elif daction == 'create':
+                # Assume that we're unfolding $target_path, and that the link
+                # removal action is earlier than the dir creation action
+                # in the task queue. FIXME: is this a safe assumption?
+                return True
+            else:  # no dir action
+                return False
+
+        elif laction == 'create':
+            if daction == 'remove':
+                # Assume that we're folding $target_path, and that the dir
+                # removal action is earlier than the link creation action
+                # in the task queue. FIXME: is this a safe assumption?
+                return True
+            elif daction == 'create':
+                internal_error("creating link and dir: %s" % target_path)
+                return True
+            else:  # no dir action
+                return True
+
+        else:
+            # No link action
+            if daction == 'remove':
+                return False
+            elif daction == 'create':
+                return True
+            else:  # no dir action
+                # fall through to below
+                pass
+
+        if self.parent_link_scheduled_for_removal(target_path):
+            return False
+
+        if os.path.exists(target_path) or os.path.islink(target_path):
+            debug(4, 3, "| is_a_node(%s): really exists" % target_path)
+            return True
+
+        debug(4, 3, "| is_a_node(%s): returning false" % target_path)
+        return False
+
+    #=========================================================================
+    # read_a_link($link)
+    #
+    # Return the destination of a current or planned link.
+    #
+    # Throws a fatal exception if the given path is not a current or planned link.
+    #=========================================================================
+    def read_a_link(self, link):
+        action = self.link_task_action(link)
+        if action:
+            debug(4, 2, "read_a_link(%s): task exists with action %s" % (link, action))
+
+            if action == 'create':
+                return self.link_task_for[link]['source']
+            elif action == 'remove':
+                internal_error(
+                    "read_a_link() passed a path that is scheduled for removal: %s" % link
+                )
+
+        elif os.path.islink(link):
+            debug(4, 2, "read_a_link(%s): is a real link" % link)
+            try:
+                return os.readlink(link)
+            except OSError as e:
+                error("Could not read link: %s (%s)", link, e)
+
+        internal_error("read_a_link() passed a non-link path: %s" % link)
+
+    #=========================================================================
+    # do_link($link_dest, $link_src)
+    #
+    # Wrap 'link' operation for later processing.
+    #
+    # Throws an error if this clashes with an existing planned operation.
+    # Cleans up operations that undo previous operations.
+    #=========================================================================
+    def do_link(self, link_dest, link_src):
+        if link_src in self.dir_task_for:
+            task_ref = self.dir_task_for[link_src]
+
+            if task_ref['action'] == 'create':
+                if task_ref['type'] == 'dir':
+                    internal_error(
+                        "new link (%s => %s) clashes with planned new directory"
+                        % (link_src, link_dest)
+                    )
+            elif task_ref['action'] == 'remove':
+                # We may need to remove a directory before creating a link so continue.
+                pass
+            else:
+                internal_error("bad task action: %s" % task_ref['action'])
+
+        if link_src in self.link_task_for:
+            task_ref = self.link_task_for[link_src]
+
+            if task_ref['action'] == 'create':
+                if task_ref['source'] != link_dest:
+                    internal_error(
+                        "new link clashes with planned new link: %s => %s" % (
+                            task_ref['path'], task_ref['source']
+                        )
+                    )
+                else:
+                    debug(1, 0, "LINK: %s => %s (duplicates previous action)"
+                          % (link_src, link_dest))
+                    return
+
+            elif task_ref['action'] == 'remove':
+                if task_ref['source'] == link_dest:
+                    # No need to remove a link we are going to recreate
+                    debug(1, 0, "LINK: %s => %s (reverts previous action)" % (link_src, link_dest))
+                    self.link_task_for[link_src]['action'] = 'skip'
+                    del self.link_task_for[link_src]
+                    return
+                # We may need to remove a link to replace it so continue
+            else:
+                internal_error("bad task action: %s" % task_ref['action'])
+
+        # Creating a new link
+        debug(1, 0, "LINK: %s => %s" % (link_src, link_dest))
+        task = {
+            'action': 'create',
+            'type': 'link',
+            'path': link_src,
+            'source': link_dest,
+        }
+        self.tasks.append(task)
+        self.link_task_for[link_src] = task
+
+        return
+
+    #=========================================================================
+    # do_unlink($file)
+    #
+    # Wrap 'unlink' operation for later processing.
+    #
+    # Throws an error if this clashes with an existing planned operation.
+    # Will remove an existing planned link.
+    #=========================================================================
+    def do_unlink(self, file_path):
+        if file_path in self.link_task_for:
+            task_ref = self.link_task_for[file_path]
+
+            if task_ref['action'] == 'remove':
+                debug(1, 0, "UNLINK: %s (duplicates previous action)" % file_path)
+                return
+            elif task_ref['action'] == 'create':
+                # Don't need to create a link then remove it
+                debug(1, 0, "UNLINK: %s (reverts previous action)" % file_path)
+                self.link_task_for[file_path]['action'] = 'skip'
+                del self.link_task_for[file_path]
+                return
+            else:
+                internal_error("bad task action: %s" % task_ref['action'])
+
+        if file_path in self.dir_task_for and self.dir_task_for[file_path] == 'create':
+            internal_error(
+                "new unlink operation clashes with planned operation: %s dir %s" % (
+                    self.dir_task_for[file_path]['action'], file_path
+                )
+            )
+
+        # Remove the link
+        debug(1, 0, "UNLINK: %s" % file_path)
+
+        try:
+            source = os.readlink(file_path)
+        except OSError as e:
+            error("could not readlink %s (%s)", file_path, e)
+
+        task = {
+            'action': 'remove',
+            'type': 'link',
+            'path': file_path,
+            'source': source,
+        }
+        self.tasks.append(task)
+        self.link_task_for[file_path] = task
+
+        return
+
+    #=========================================================================
+    # do_mkdir($dir)
+    #
+    # Wrap 'mkdir' operation.
+    #
+    # Throws a fatal exception if operation fails. Outputs a message if
+    # 'verbose' option is set. Does not perform operation if 'simulate'
+    # option is set. Cleans up operations that undo previous operations.
+    #=========================================================================
+    def do_mkdir(self, dir_path):
+        if dir_path in self.link_task_for:
+            task_ref = self.link_task_for[dir_path]
+
+            if task_ref['action'] == 'create':
+                internal_error(
+                    "new dir clashes with planned new link (%s => %s)" % (
+                        task_ref['path'], task_ref['source']
+                    )
+                )
+            elif task_ref['action'] == 'remove':
+                # May need to remove a link before creating a directory so continue
+                pass
+            else:
+                internal_error("bad task action: %s" % task_ref['action'])
+
+        if dir_path in self.dir_task_for:
+            task_ref = self.dir_task_for[dir_path]
+
+            if task_ref['action'] == 'create':
+                debug(1, 0, "MKDIR: %s (duplicates previous action)" % dir_path)
+                return
+            elif task_ref['action'] == 'remove':
+                debug(1, 0, "MKDIR: %s (reverts previous action)" % dir_path)
+                self.dir_task_for[dir_path]['action'] = 'skip'
+                del self.dir_task_for[dir_path]
+                return
+            else:
+                internal_error("bad task action: %s" % task_ref['action'])
+
+        debug(1, 0, "MKDIR: %s" % dir_path)
+        task = {
+            'action': 'create',
+            'type': 'dir',
+            'path': dir_path,
+            'source': None,
+        }
+        self.tasks.append(task)
+        self.dir_task_for[dir_path] = task
+
+        return
+
+    #=========================================================================
+    # do_rmdir($dir)
+    #
+    # Wrap 'rmdir' operation.
+    #
+    # Throws a fatal exception if operation fails. Outputs a message if
+    # 'verbose' option is set. Does not perform operation if 'simulate'
+    # option is set.
+    #=========================================================================
+    def do_rmdir(self, dir_path):
+        if dir_path in self.link_task_for:
+            task_ref = self.link_task_for[dir_path]
+            internal_error(
+                "rmdir clashes with planned operation: %s link %s => %s" % (
+                    task_ref['action'], task_ref['path'], task_ref['source']
+                )
+            )
+
+        if dir_path in self.dir_task_for:
+            task_ref = self.dir_task_for[dir_path]
+
+            if task_ref['action'] == 'remove':
+                debug(1, 0, "RMDIR %s (duplicates previous action)" % dir_path)
+                return
+            elif task_ref['action'] == 'create':
+                debug(1, 0, "MKDIR %s (reverts previous action)" % dir_path)
+                self.dir_task_for[dir_path]['action'] = 'skip'
+                del self.dir_task_for[dir_path]
+                return
+            else:
+                internal_error("bad task action: %s" % task_ref['action'])
+
+        debug(1, 0, "RMDIR %s" % dir_path)
+        task = {
+            'action': 'remove',
+            'type': 'dir',
+            'path': dir_path,
+            'source': '',
+        }
+        self.tasks.append(task)
+        self.dir_task_for[dir_path] = task
+
+        return
+
+    #=========================================================================
+    # do_mv($src, $dst)
+    #
+    # Wrap 'move' operation for later processing.
+    #
+    # Throws an error if this clashes with an existing planned operation.
+    # Alters contents of package installation image in stow dir.
+    #=========================================================================
+    def do_mv(self, src, dst):
+        if src in self.link_task_for:
+            # I don't *think* this should ever happen, but I'm not
+            # 100% sure.
+            task_ref = self.link_task_for[src]
+            internal_error(
+                "do_mv: pre-existing link task for %s; action: %s, source: %s" % (
+                    src, task_ref['action'], task_ref['source']
+                )
+            )
+        elif src in self.dir_task_for:
+            task_ref = self.dir_task_for[src]
+            internal_error(
+                "do_mv: pre-existing dir task for %s?! action: %s" % (
+                    src, task_ref['action']
+                )
+            )
+
+        # Remove the link
+        debug(1, 0, "MV: %s -> %s" % (src, dst))
+
+        task = {
+            'action': 'move',
+            'type': 'file',
+            'path': src,
+            'dest': dst,
+        }
+        self.tasks.append(task)
+
+        # FIXME: do we need this for anything?
+        # self.mv_task_for[file] = task
+
+        return
+
+
+#############################################################################
+#
+# End of methods; helper functions follow.
+#
+
+def internal_error(message, *args):
+    """Output internal error message in a consistent form and die."""
+    if args:
+        error_msg = message % args
+    else:
+        error_msg = message
+    stack = traceback.format_stack()
+    stacktrace = ''.join(stack[:-1])
+
+    sys.stderr.write("\n%s: INTERNAL ERROR: %s\n%s\n" % (ProgramName, error_msg, stacktrace))
+    sys.stderr.write("This _is_ a bug. Please submit a bug report so we can fix it! :-)\n")
+    sys.stderr.write("See https://github.com/isarandi/stow-python for how to do this.\n")
+    sys.exit(1)
+
+
+##############################################################################
+#
+# CLI (stow script)
+#
+##############################################################################
+
+
+def main():
+    options, pkgs_to_unstow, pkgs_to_stow = process_options()
+
+    stow = Stow(**options)
+
+    stow.plan_unstow(*pkgs_to_unstow)
+    stow.plan_stow(*pkgs_to_stow)
+
+    conflicts = stow.get_conflicts()
+
+    if conflicts:
+        for action in ('unstow', 'stow'):
+            if action not in conflicts:
+                continue
+            for package in sorted(conflicts[action].keys()):
+                sys.stderr.write("WARNING! %sing %s would cause conflicts:\n" % (action, package))
+                for message in sorted(conflicts[action][package]):
+                    sys.stderr.write("  * %s\n" % message)
+        sys.stderr.write("All operations aborted.\n")
+        sys.exit(1)
+    else:
+        if options.get('simulate'):
+            sys.stderr.write("WARNING: in simulation mode so not modifying filesystem.\n")
+            return
+
+        stow.process_tasks()
+
+
+def process_options():
+    """
+    Parse and process command line and .stowrc file options.
+
+    Returns: (options, pkgs_to_unstow, pkgs_to_stow)
+    """
+    # Get cli options.
+    cli_options, pkgs_to_unstow, pkgs_to_stow = parse_options(sys.argv[1:])
+
+    # Get the .stowrc options.
+    # Note that rc_pkgs_to_unstow and rc_pkgs_to_stow are ignored.
+    rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow = get_config_file_options()
+
+    # Merge .stowrc and command line options.
+    # Preference is given to cli options.
+    options = dict(rc_options)
+    for option, cli_value in cli_options.items():
+        rc_value = rc_options.get(option)
+
+        if isinstance(cli_value, list) and rc_value is not None:
+            # rc options come first in merged arrays.
+            options[option] = list(rc_value) + list(cli_value)
+        else:
+            # cli options overwrite conflicting rc options.
+            options[option] = cli_value
+
+    # Run checks on the merged options.
+    sanitize_path_options(options)
+    check_packages(pkgs_to_unstow, pkgs_to_stow)
+
+    # Return merged and processed options.
+    return (options, pkgs_to_unstow, pkgs_to_stow)
+
+
+def parse_options(args):
+    """
+    Parse command line options.
+
+    Returns: (options, pkgs_to_unstow, pkgs_to_stow)
+    """
+    options = {}
+    pkgs_to_unstow = []
+    pkgs_to_stow = []
+    action = 'stow'
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+
+        # Handle options with values
+        if arg in ('-d', '--dir') and i + 1 < len(args):
+            i += 1
+            options['dir'] = args[i]
+        elif arg.startswith('--dir='):
+            options['dir'] = arg[6:]
+        elif arg.startswith('-d') and len(arg) > 2:
+            options['dir'] = arg[2:]
+
+        elif arg in ('-t', '--target') and i + 1 < len(args):
+            i += 1
+            options['target'] = args[i]
+        elif arg.startswith('--target='):
+            options['target'] = arg[9:]
+        elif arg.startswith('-t') and len(arg) > 2:
+            options['target'] = arg[2:]
+
+        elif arg == '--ignore' and i + 1 < len(args):
+            i += 1
+            regex = args[i]
+            if 'ignore' not in options:
+                options['ignore'] = []
+            options['ignore'].append(re.compile('(%s)\\Z' % regex))
+        elif arg.startswith('--ignore='):
+            regex = arg[9:]
+            if 'ignore' not in options:
+                options['ignore'] = []
+            options['ignore'].append(re.compile('(%s)\\Z' % regex))
+
+        elif arg == '--override' and i + 1 < len(args):
+            i += 1
+            regex = args[i]
+            if 'override' not in options:
+                options['override'] = []
+            options['override'].append(re.compile('\\A(%s)' % regex))
+        elif arg.startswith('--override='):
+            regex = arg[11:]
+            if 'override' not in options:
+                options['override'] = []
+            options['override'].append(re.compile('\\A(%s)' % regex))
+
+        elif arg == '--defer' and i + 1 < len(args):
+            i += 1
+            regex = args[i]
+            if 'defer' not in options:
+                options['defer'] = []
+            options['defer'].append(re.compile('\\A(%s)' % regex))
+        elif arg.startswith('--defer='):
+            regex = arg[8:]
+            if 'defer' not in options:
+                options['defer'] = []
+            options['defer'].append(re.compile('\\A(%s)' % regex))
+
+        # Verbose option with optional value
+        elif arg in ('-v', '--verbose'):
+            options['verbose'] = options.get('verbose', 0) + 1
+        elif arg.startswith('--verbose='):
+            try:
+                options['verbose'] = int(arg[10:])
+            except ValueError:
+                options['verbose'] = 1
+
+        # Boolean flags
+        elif arg in ('-n', '--no', '--simulate'):
+            options['simulate'] = 1
+        elif arg in ('-p', '--compat'):
+            options['compat'] = 1
+        elif arg == '--adopt':
+            options['adopt'] = 1
+        elif arg == '--no-folding':
+            options['no-folding'] = 1
+        elif arg == '--dotfiles':
+            options['dotfiles'] = 1
+
+        # Action flags
+        elif arg in ('-D', '--delete'):
+            action = 'unstow'
+        elif arg in ('-S', '--stow'):
+            action = 'stow'
+        elif arg in ('-R', '--restow'):
+            action = 'restow'
+
+        # Help and version
+        elif arg in ('-h', '--help'):
+            usage()
+        elif arg in ('-V', '--version'):
+            version()
+
+        # Package argument
+        elif not arg.startswith('-'):
+            if action == 'restow':
+                pkgs_to_unstow.append(arg)
+                pkgs_to_stow.append(arg)
+            elif action == 'unstow':
+                pkgs_to_unstow.append(arg)
+            else:
+                pkgs_to_stow.append(arg)
+
+        else:
+            # Strip leading dashes for the error message (match Perl's Getopt::Long)
+            opt_name = arg.lstrip('-')
+            # Print error without stow: prefix (Getopt::Long format)
+            sys.stderr.write("Unknown option: %s\n" % opt_name)
+            usage(exit_code=1)
+
+        i += 1
+
+    return (options, pkgs_to_unstow, pkgs_to_stow)
+
+
+def sanitize_path_options(options):
+    """Validate and set defaults for dir and target options."""
+    if 'dir' not in options:
+        stow_dir_env = os.environ.get('STOW_DIR', '')
+        if stow_dir_env:
+            options['dir'] = stow_dir_env
+        else:
+            options['dir'] = os.getcwd()
+
+    if not os.path.isdir(options['dir']):
+        usage("--dir value '%s' is not a valid directory" % options['dir'])
+
+    if 'target' in options:
+        if not os.path.isdir(options['target']):
+            usage("--target value '%s' is not a valid directory" % options['target'])
+    else:
+        target = parent(options['dir'])
+        options['target'] = target if target else '.'
+
+
+def check_packages(pkgs_to_stow, pkgs_to_unstow):
+    """Validate package names."""
+    if not pkgs_to_stow and not pkgs_to_unstow:
+        usage("No packages to stow or unstow")
+
+    # check package arguments
+    for package in list(pkgs_to_stow) + list(pkgs_to_unstow):
+        # delete trailing slashes
+        package = package.rstrip('/')
+        if '/' in package:
+            error("Slashes are not permitted in package names")
+
+
+def get_config_file_options():
+    """
+    Search for default settings in any .stowrc files.
+
+    Returns: (rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow)
+    """
+    defaults = []
+    dirlist = ['.stowrc']
+
+    home = os.environ.get('HOME')
+    if home:
+        dirlist.insert(0, os.path.join(home, '.stowrc'))
+
+    for file_path in dirlist:
+        if os.path.isfile(file_path) and os.access(file_path, os.R_OK):
+            try:
+                with open(file_path, 'r') as f:
+                    for line in f:
+                        line = line.rstrip('\n\r')
+                        # Use shlex to parse shell-like syntax
+                        try:
+                            words = shlex.split(line)
+                            defaults.extend(words)
+                        except ValueError:
+                            # Handle quoted strings that span lines, etc.
+                            defaults.extend(line.split())
+            except IOError:
+                sys.stderr.write("Could not open %s for reading\n" % file_path)
+                sys.exit(1)
+
+    # Parse the options
+    rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow = parse_options(defaults)
+
+    # Expand environment variables and glob characters.
+    if 'target' in rc_options:
+        rc_options['target'] = expand_filepath(rc_options['target'], '--target option')
+    if 'dir' in rc_options:
+        rc_options['dir'] = expand_filepath(rc_options['dir'], '--dir option')
+
+    return (rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow)
+
+
+def expand_filepath(path, source):
+    """
+    Handles expansions that need to be applied to file paths.
+    Currently expands environment variables and the tilde.
+    """
+    path = expand_environment(path, source)
+    path = expand_tilde(path)
+    return path
+
+
+def expand_environment(path, source):
+    """
+    Expands environment variables.
+
+    Replace non-escaped $VAR and ${VAR} with os.environ[VAR].
+    """
+    def replace_var(match):
+        var = match.group(1) or match.group(2)
+        if var not in os.environ:
+            sys.stderr.write(
+                "%s references undefined environment variable $%s; aborting!\n" % (source, var)
+            )
+            sys.exit(1)
+        return os.environ[var]
+
+    # Replace ${VAR} first (handles spaces in var names)
+    path = re.sub(r'(?<!\\)\$\{([^}]+)\}', replace_var, path)
+    # Replace $VAR
+    path = re.sub(r'(?<!\\)\$(\w+)', replace_var, path)
+    # Remove \$ escapes
+    path = path.replace('\\$', '$')
+
+    return path
+
+
+def expand_tilde(path):
+    """
+    Expands tilde to user's home directory path.
+    """
+    # Handle escaped tilde first - must be done before checking for ~
+    # so that \~/path returns ~/path (literal tilde)
+    if '\\~' in path:
+        path = path.replace('\\~', '~')
+        return path
+
+    if not path.startswith('~'):
+        return path
+
+    # Handle ~user syntax
+    match = re.match(r'^~([^/]*)', path)
+    if match:
+        user = match.group(1)
+        if user:
+            # ~username - get that user's home directory
+            try:
+                home = pwd.getpwnam(user)[5]
+            except KeyError:
+                # User not found, return unchanged
+                return path
+        else:
+            # Just ~ - get current user's home
+            home = os.environ.get('HOME') or os.environ.get('LOGDIR')
+            if not home:
+                try:
+                    home = pwd.getpwuid(os.getuid())[5]
+                except KeyError:
+                    return path
+
+        path = home + path[len(match.group(0)):]
+
+    return path
+
+
+def usage(msg=None, exit_code=None):
+    """Print program usage message and exit."""
+    if msg:
+        sys.stderr.write("%s: %s\n\n" % (ProgramName, msg))
+
+    print("""%s (Stow-Python) version %s
+
+Stow-Python is a Python reimplementation of GNU Stow.
+Original GNU Stow by Bob Glickstein, Guillaume Morin, Kahlil Hodgson, Adam Spiers, and others.
+
+SYNOPSIS:
+
+    %s [OPTION ...] [-D|-S|-R] PACKAGE ... [-D|-S|-R] PACKAGE ...
+
+OPTIONS:
+
+    -d DIR, --dir=DIR     Set stow dir to DIR (default is current dir)
+    -t DIR, --target=DIR  Set target to DIR (default is parent of stow dir)
+
+    -S, --stow            Stow the package names that follow this option
+    -D, --delete          Unstow the package names that follow this option
+    -R, --restow          Restow (like stow -D followed by stow -S)
+
+    --ignore=REGEX        Ignore files ending in this Perl regex
+    --defer=REGEX         Don't stow files beginning with this Perl regex
+                          if the file is already stowed to another package
+    --override=REGEX      Force stowing files beginning with this Perl regex
+                          if the file is already stowed to another package
+    --adopt               (Use with care!)  Import existing files into stow package
+                          from target.  Please read docs before using.
+    --dotfiles            Enables special handling for dotfiles that are
+                          Stow packages that start with "dot-" and not "."
+    -p, --compat          Use legacy algorithm for unstowing
+
+    -n, --no, --simulate  Do not actually make any filesystem changes
+    -v, --verbose[=N]     Increase verbosity (levels are from 0 to 5;
+                            -v or --verbose adds 1; --verbose=N sets level)
+    -V, --version         Show stow version number
+    -h, --help            Show this help
+
+GNU Stow home page: <http://www.gnu.org/software/stow/>
+Report deviations from GNU Stow: <https://github.com/isarandi/stow-python/issues>"""
+          % (ProgramName, VERSION, ProgramName))
+
+    if exit_code is not None:
+        sys.exit(exit_code)
+    elif msg:
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+
+def version():
+    """Print version and exit."""
+    print("%s (Stow-Python) version %s" % (ProgramName, VERSION))
+    sys.exit(0)
+
+
+if __name__ == '__main__':
+    main()

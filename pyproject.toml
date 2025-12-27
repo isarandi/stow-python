@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stow-python"
+version = "2.4.1"
+description = "Stow-Python - Python reimplementation of GNU Stow symlink farm manager"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+# Note: Code works on Python 2.7+, but pyproject.toml requires 3.7+ to parse.
+# For Python 2.7, install via: python setup.py install
+requires-python = ">=2.7"
+authors = [
+    {name = "Istvan Sarandi", email = "istvan.sarandi@gmail.com"},
+]
+keywords = ["stow", "symlink", "dotfiles", "package-manager"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
+    "Programming Language :: Python :: 2",
+    "Programming Language :: Python :: 2.7",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.0",
+    "Programming Language :: Python :: 3.1",
+    "Programming Language :: Python :: 3.2",
+    "Programming Language :: Python :: 3.3",
+    "Programming Language :: Python :: 3.4",
+    "Programming Language :: Python :: 3.5",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Installation/Setup",
+    "Topic :: System :: Systems Administration",
+]
+
+[project.optional-dependencies]
+tests = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/isarandi/stow-python"
+"GNU Stow" = "https://www.gnu.org/software/stow/"
+
+# No packages, just standalone scripts
+[tool.setuptools]
+py-modules = []
+script-files = ["bin/stow", "bin/chkstow"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
