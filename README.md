@@ -25,7 +25,7 @@ After this, you can simply run the `stow` command since the executable will be i
 
 ## Use
 
-Stow-Python is an exact reimplementation of GNU Stow, so refer to the [GNU Stow manual](https://www.gnu.org/software/stow/manual/) for all options and usage details, or see `stow --help` for all options, or refer to the [GNU Stow manual](https://www.gnu.org/software/stow/manual/).
+Since Stow-Python is an exact reimplementation of GNU Stow, you can refer to the [GNU Stow manual](https://www.gnu.org/software/stow/manual/) for all options and usage details, or see `stow --help`.
 
 To use the `chkstow` diagnostic tool for common stow directory problems, you can either download it directly like the `stow` executable, or use pip, it is automatically installed with stow-python. The `stow` and `chkstow` executables do not depend on each other, both are standalone with Python as the sole dependency. 
 
