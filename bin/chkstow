@@ -67,11 +67,6 @@ def list_pkg(path):
         Package[link_dest] = 1
 
 
-# Expose as 'list' for Perl compatibility (tests use chkstow.list)
-# Note: This shadows the built-in list() but that's intentional for module access
-# We use [:] slicing instead of list() in check_stow to avoid the conflict
-
-
 def skip_dirs(dirpath):
     """Check if directory should be skipped (contains .stow or .notstowed)."""
     stow_marker = os.path.join(dirpath, '.stow')
