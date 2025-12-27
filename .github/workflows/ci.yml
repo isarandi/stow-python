@@ -43,9 +43,8 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sed -i 's/deb.debian.org/archive.debian.org/g' /etc/apt/sources.list
-          sed -i 's/security.debian.org/archive.debian.org/g' /etc/apt/sources.list
-          sed -i '/stretch-updates/d' /etc/apt/sources.list
+          rm /etc/apt/sources.list.d/* 2>/dev/null || true
+          echo "deb http://archive.debian.org/debian bullseye main" > /etc/apt/sources.list
           apt-get update && apt-get install -y perl make
 
       - name: Install test dependencies
@@ -68,9 +67,8 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sed -i 's/deb.debian.org/archive.debian.org/g' /etc/apt/sources.list
-          sed -i 's/security.debian.org/archive.debian.org/g' /etc/apt/sources.list
-          sed -i '/buster-updates/d' /etc/apt/sources.list
+          rm /etc/apt/sources.list.d/* 2>/dev/null || true
+          echo "deb http://archive.debian.org/debian buster main" > /etc/apt/sources.list
           apt-get update && apt-get install -y perl make
 
       - name: Install test dependencies
