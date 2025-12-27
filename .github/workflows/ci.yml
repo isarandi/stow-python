@@ -59,6 +59,9 @@ jobs:
           name: gnu-stow
           path: tests/gnu_stow_for_testing
 
+      - name: Fix permissions
+        run: chmod +x tests/gnu_stow_for_testing/bin/*
+
       - name: Run tests
         run: pytest tests/ -v
 
@@ -85,6 +88,9 @@ jobs:
           name: gnu-stow
           path: tests/gnu_stow_for_testing
 
+      - name: Fix permissions
+        run: chmod +x tests/gnu_stow_for_testing/bin/*
+
       - name: Run tests
         run: pytest tests/ -v
 
@@ -110,6 +116,9 @@ jobs:
         with:
           name: gnu-stow
           path: tests/gnu_stow_for_testing
+
+      - name: Fix permissions
+        run: chmod +x tests/gnu_stow_for_testing/bin/*
 
       - name: Run tests
         run: pytest tests/ -v
