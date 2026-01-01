@@ -32,9 +32,10 @@ _stow_path = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin', 'stow')
 stow_module = types.ModuleType('stow_module')
 stow_module.__file__ = _stow_path
+# Register module BEFORE exec so dataclass decorators can find it
+sys.modules['stow_module'] = stow_module
 with open(_stow_path) as _f:
     exec(compile(_f.read(), _stow_path, 'exec'), stow_module.__dict__)
-sys.modules['stow_module'] = stow_module
 
 Stow = stow_module.Stow
 parent = stow_module.parent

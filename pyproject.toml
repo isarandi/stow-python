@@ -8,9 +8,7 @@ version = "2.4.1"
 description = "Stow-Python - Python reimplementation of GNU Stow symlink farm manager"
 readme = "README.md"
 license = "GPL-3.0-or-later"
-# Note: Code works on Python 2.7+, but pyproject.toml requires 3.7+ to parse.
-# For Python 2.7, install via: python setup.py install
-requires-python = ">=2.7"
+requires-python = ">=3.10"
 authors = [
     {name = "Istvan Sarandi", email = "istvan.sarandi@gmail.com"},
 ]
@@ -22,19 +20,7 @@ classifiers = [
     "Intended Audience :: System Administrators",
     "Operating System :: POSIX",
     "Operating System :: Unix",
-    "Programming Language :: Python :: 2",
-    "Programming Language :: Python :: 2.7",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.0",
-    "Programming Language :: Python :: 3.1",
-    "Programming Language :: Python :: 3.2",
-    "Programming Language :: Python :: 3.3",
-    "Programming Language :: Python :: 3.4",
-    "Programming Language :: Python :: 3.5",
-    "Programming Language :: Python :: 3.6",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -51,9 +37,14 @@ tests = ["pytest"]
 Homepage = "https://github.com/isarandi/stow-python"
 "GNU Stow" = "https://www.gnu.org/software/stow/"
 
-# No packages, just standalone scripts
 [tool.setuptools]
-py-modules = []
+packages = ["pystow"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+# Scripts are built from src/pystow modules and placed in bin/
+# by scripts/build_single_file.py - they are not directly edited
 script-files = ["bin/stow", "bin/chkstow"]
 
 [tool.pytest.ini_options]
