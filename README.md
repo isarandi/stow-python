@@ -1,10 +1,10 @@
 # Stow-Python
 
-This is a pedantically faithful, single-file, dependency-free Python reimplementation of all of [GNU Stow](https://www.gnu.org/software/stow/), the symlink farm manager, that runs on any Python version from 2.7 to 3.14 and beyond.
+This is a pedantically faithful, single-file, dependency-free Python reimplementation of all of [GNU Stow](https://www.gnu.org/software/stow/), the symlink farm manager, that runs on Python 3.10 and above.
 
-The reason for making this is that GNU Stow is very useful but it's written in Perl. This can cause some headaches on some HPC clusters or other systems that you don't control yourself regarding the Perl toolchain. This reimplementation lets you use Stow on systems where Perl isn't available (or isn't the correct version, or misses some packages etc.) but *some* version of Python is there (2.7 or 3.0–3.14+), which is basically always.
+The reason for making this is to help transition the GNU Stow project from Perl to Python, providing a modern, maintainable codebase while preserving full compatibility with existing workflows.
 
-The goal here is identical behavior to GNU Stow, to achieve true, worry-free drop-in substitution. This is tested both with ports of the original Perl tests and with oracle tests against the Perl executable verifying identical output, return codes and filesystem state. The code itself is not very pythonic, following the logic of the original Perl code is of higher priority to ensure correctness.
+The goal here is identical behavior to GNU Stow, to achieve true, worry-free drop-in substitution. This is tested both with ports of the original Perl tests and with oracle tests against the Perl executable verifying identical output, return codes and filesystem state. The code follows modern Python idioms using dataclasses, enums, and pattern matching, while maintaining behavioral equivalence with GNU Stow verified through oracle testing. See [known differences](docs/perl-differences.md) for minor edge cases.
 
 ## Install
 
@@ -27,7 +27,39 @@ After this, you can simply run the `stow` command since the executable will be i
 
 Since Stow-Python is an exact reimplementation of GNU Stow, you can refer to the [GNU Stow manual](https://www.gnu.org/software/stow/manual/) for all options and usage details, or see `stow --help`.
 
-To use the `chkstow` diagnostic tool for common stow directory problems, you can either download it directly like the `stow` executable, or use pip, it is automatically installed with stow-python. The `stow` and `chkstow` executables do not depend on each other, both are standalone with Python as the sole dependency. 
+To use the `chkstow` diagnostic tool for common stow directory problems, you can either download it directly like the `stow` executable, or use pip, it is automatically installed with stow-python. The `stow` and `chkstow` executables do not depend on each other, both are standalone with Python as the sole dependency.
+
+## Library Usage
+
+Stow-Python can also be used as a Python library:
+
+```python
+from stow_python import stow, unstow, restow, StowConfig
+
+# Simple usage
+result = stow("emacs", "vim", dir="./stow", target="/home/user")
+if result.conflicts:
+    print("Conflicts:", result.conflicts)
+
+# With reusable configuration
+config = StowConfig(dir="./stow", target="/home/user", dotfiles=True)
+stow("pkg1", config=config)
+unstow("pkg2", config=config)
+
+# Dry-run mode
+result = stow("pkg", dir="./stow", target="/home/user", simulate=True)
+print("Would perform:", result.tasks)
+```
+
+## Building
+
+The single-file executables (`bin/stow` and `bin/chkstow`) are built from the multi-file library in `src/stow_python/`:
+
+```bash
+python scripts/build_single_file.py
+```
+
+This bundles all modules into standalone scripts with no dependencies beyond Python 3.10+.
 
 ## Run the tests
 
