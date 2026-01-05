@@ -29,38 +29,46 @@ class TestLinkDestWithinStowDir:
     def test_relative_stow_dir_link_to_top_level_package_file(self, stow_test_env):
         """Relative stow dir, link to top-level package file."""
         # This is a relative path, unlike ABS_TEST_DIR
-        stow = new_Stow(dir=testutil.TEST_DIR + "/stow", target=testutil.TEST_DIR + "/target")
+        stow = new_Stow(
+            dir=testutil.TEST_DIR + "/stow", target=testutil.TEST_DIR + "/target"
+        )
 
-        package, path = stow.link_dest_within_stow_dir("../stow/pkg/dir/file")
-        assert package == "pkg", "package"
-        assert path == "dir/file", "path"
+        result = stow._parse_link_dest_as_package_subpath("../stow/pkg/dir/file")
+        assert result.package == "pkg", "package"
+        assert result.subpath == "dir/file", "path"
 
     def test_relative_stow_dir_link_to_second_level_package_file(self, stow_test_env):
         """Relative stow dir, link to second-level package file."""
-        stow = new_Stow(dir=testutil.TEST_DIR + "/stow", target=testutil.TEST_DIR + "/target")
+        stow = new_Stow(
+            dir=testutil.TEST_DIR + "/stow", target=testutil.TEST_DIR + "/target"
+        )
 
-        package, path = stow.link_dest_within_stow_dir("../stow/pkg/dir/subdir/file")
-        assert package == "pkg", "package"
-        assert path == "dir/subdir/file", "path"
+        result = stow._parse_link_dest_as_package_subpath("../stow/pkg/dir/subdir/file")
+        assert result.package == "pkg", "package"
+        assert result.subpath == "dir/subdir/file", "path"
 
     def test_absolute_stow_dir_link_to_top_level_package_file(self, stow_test_env):
         """Absolute stow dir, link to top-level package file."""
         # This is an absolute path, unlike TEST_DIR
         stow = new_Stow(
-            dir=testutil.ABS_TEST_DIR + "/stow", target=testutil.ABS_TEST_DIR + "/target")
+            dir=testutil.ABS_TEST_DIR + "/stow",
+            target=testutil.ABS_TEST_DIR + "/target",
+        )
 
-        package, path = stow.link_dest_within_stow_dir("../stow/pkg/dir/file")
-        assert package == "pkg", "package"
-        assert path == "dir/file", "path"
+        result = stow._parse_link_dest_as_package_subpath("../stow/pkg/dir/file")
+        assert result.package == "pkg", "package"
+        assert result.subpath == "dir/file", "path"
 
     def test_absolute_stow_dir_link_to_second_level_package_file(self, stow_test_env):
         """Absolute stow dir, link to second-level package file."""
         stow = new_Stow(
-            dir=testutil.ABS_TEST_DIR + "/stow", target=testutil.ABS_TEST_DIR + "/target")
+            dir=testutil.ABS_TEST_DIR + "/stow",
+            target=testutil.ABS_TEST_DIR + "/target",
+        )
 
-        package, path = stow.link_dest_within_stow_dir("../stow/pkg/dir/subdir/file")
-        assert package == "pkg", "package"
-        assert path == "dir/subdir/file", "path"
+        result = stow._parse_link_dest_as_package_subpath("../stow/pkg/dir/subdir/file")
+        assert result.package == "pkg", "package"
+        assert result.subpath == "dir/subdir/file", "path"
 
     def test_link_to_path_in_target(self, stow_test_env):
         """Link to path in target.
@@ -69,17 +77,19 @@ class TestLinkDestWithinStowDir:
         the stow dir, so they're not owned by stow.
         """
         stow = new_Stow(
-            dir=testutil.ABS_TEST_DIR + "/stow", target=testutil.ABS_TEST_DIR + "/target")
+            dir=testutil.ABS_TEST_DIR + "/stow",
+            target=testutil.ABS_TEST_DIR + "/target",
+        )
 
-        package, path = stow.link_dest_within_stow_dir("./alien")
-        assert path == "", "alien is in target, so path is empty"
-        assert package == "", "alien is in target, so package is empty"
+        result = stow._parse_link_dest_as_package_subpath("./alien")
+        assert result is None, "alien is in target, so result is None"
 
     def test_link_to_path_outside_target_and_stow_dir(self, stow_test_env):
         """Link to path outside target and stow dir."""
         stow = new_Stow(
-            dir=testutil.ABS_TEST_DIR + "/stow", target=testutil.ABS_TEST_DIR + "/target")
+            dir=testutil.ABS_TEST_DIR + "/stow",
+            target=testutil.ABS_TEST_DIR + "/target",
+        )
 
-        package, path = stow.link_dest_within_stow_dir("../alien")
-        assert path == "", "alien is outside, so path is empty"
-        assert package == "", "alien is outside, so package is empty"
+        result = stow._parse_link_dest_as_package_subpath("../alien")
+        assert result is None, "alien is outside, so result is None"

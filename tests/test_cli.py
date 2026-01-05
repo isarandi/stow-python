@@ -30,7 +30,7 @@ import subprocess
 import sys
 
 # Path to the stow script
-STOW_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bin', 'stow')
+STOW_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "bin", "stow")
 
 
 def run_stow(*args):
@@ -40,16 +40,12 @@ def run_stow(*args):
     Returns: (returncode, stdout, stderr)
     """
     cmd = [sys.executable, STOW_SCRIPT] + list(args)
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-    )
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = proc.communicate()
     return (
         proc.returncode,
-        stdout.decode('utf-8', errors='replace'),
-        stderr.decode('utf-8', errors='replace')
+        stdout.decode("utf-8", errors="replace"),
+        stderr.decode("utf-8", errors="replace"),
     )
 
 
@@ -58,19 +54,20 @@ class TestCLI:
 
     def test_help_returns_zero_exit_code(self):
         """--help should return 0 exit code."""
-        returncode, stdout, stderr = run_stow('--help')
+        returncode, stdout, stderr = run_stow("--help")
         assert returncode == 0, "--help should return 0 exit code"
 
     def test_unrecognised_option_returns_one_exit_code(self):
         """Unrecognised option should return 1 exit code."""
-        returncode, stdout, stderr = run_stow('--foo')
+        returncode, stdout, stderr = run_stow("--foo")
         assert returncode == 1, "unrecognised option should return 1 exit code"
 
     def test_unrecognised_option_is_listed_in_error(self):
         """Unrecognised option should be listed in error message."""
-        returncode, stdout, stderr = run_stow('--foo')
+        returncode, stdout, stderr = run_stow("--foo")
         # Combine stdout and stderr since error could go to either
         output = stdout + stderr
         # Perl's Getopt::Long outputs option name without dashes
-        assert re.search(r'^Unknown option: foo$', output, re.MULTILINE), \
+        assert re.search(r"^Unknown option: foo$", output, re.MULTILINE), (
             "unrecognised option should be listed"
+        )

@@ -12,9 +12,48 @@ structures used throughout stow-python.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
+
+
+class StowError(Exception):
+    """Base exception for stow operation errors.
+
+    Attributes:
+        message: Error description
+        errno: Exit code (for CLI compatibility)
+    """
+
+    def __init__(self, message: str, errno: int = 1):
+        self.message = message
+        self.errno = errno
+        super().__init__(message)
+
+
+class StowProgrammingError(StowError):
+    """Internal error indicating a bug in stow."""
+
+    def __init__(self, message: str):
+        super().__init__(message, errno=1)
+
+
+class StowConflictError(StowError):
+    """Error raised when stow operations would cause conflicts.
+
+    Attributes:
+        conflicts: Dict mapping package names to lists of conflict messages
+    """
+
+    def __init__(self, message: str, conflicts: dict[str, list[str]]):
+        self.conflicts = conflicts
+        super().__init__(message, errno=1)
+
+
+class StowCLIError(StowError):
+    """CLI error - printed without program name prefix."""
+
+    pass
 
 
 class TaskAction(Enum):
@@ -34,14 +73,6 @@ class TaskType(Enum):
     FILE = "file"
 
 
-class Operation(Enum):
-    """High-level stow operations."""
-
-    STOW = "stow"
-    UNSTOW = "unstow"
-    RESTOW = "restow"
-
-
 @dataclass(slots=True)
 class Task:
     """
@@ -58,112 +89,60 @@ class Task:
     dest: Optional[str] = None  # For moves: the destination path
 
 
-@dataclass
-class StowOptions:
-    """
-    Configuration options for a Stow instance.
+@dataclass(slots=True, frozen=True)
+class StowedPath:
+    """Result of find_stowed_path - identifies ownership of a symlink."""
 
-    Attributes:
-        dir: The stow directory containing packages
-        target: The target directory where symlinks are created
-        verbose: Verbosity level (0-5)
-        simulate: If True, don't make filesystem changes
-        compat: Use legacy algorithm for unstowing
-        dotfiles: Enable dot-prefix handling for dotfiles
-        adopt: Import existing files into stow package
-        no_folding: Disable tree folding optimization
-        paranoid: Enable extra safety checks
-        test_mode: Test mode (output to stdout instead of stderr)
-        ignore: Patterns to ignore during stowing
-        defer: Patterns to defer (skip if already stowed elsewhere)
-        override: Patterns to force stow (replace existing stow)
-    """
+    path: str
+    stow_dir: str
+    package: str
 
-    dir: str
-    target: str
-    verbose: int = 0
-    simulate: bool = False
-    compat: bool = False
+
+@dataclass(slots=True, frozen=True)
+class PackageSubpath:
+    """A path within a package (package name + subpath within it)."""
+
+    package: str
+    subpath: str
+
+
+@dataclass(slots=True, frozen=True)
+class MarkedStowDir:
+    """A marked stow directory and the package within it."""
+
+    stow_dir: str
+    package: str
+
+
+@dataclass(slots=True, frozen=True)
+class IgnorePatterns:
+    """Compiled ignore patterns from stow ignore files."""
+
+    default_regexp: re.Pattern | None
+    local_regexp: re.Pattern | None
+
+
+@dataclass(frozen=True)
+class StowConfig:
+    """Immutable configuration for stow operations."""
+
+    dir: str = "."
+    target: str | None = None  # Default: parent of dir
     dotfiles: bool = False
     adopt: bool = False
     no_folding: bool = False
-    paranoid: bool = False
-    test_mode: bool = False
-    ignore: list[re.Pattern] = field(default_factory=list)
-    defer: list[re.Pattern] = field(default_factory=list)
-    override: list[re.Pattern] = field(default_factory=list)
-
-    @classmethod
-    def from_dict(cls, opts: dict) -> StowOptions:
-        """Create from dict, handling key name conversions."""
-        opts = dict(opts)  # Don't modify the original
-
-        # Handle 'no-folding' -> no_folding conversion
-        if "no-folding" in opts:
-            opts["no_folding"] = opts.pop("no-folding")
-
-        # Handle conflicts option (stored as conflicts in dict, not used in dataclass)
-        opts.pop("conflicts", None)
-
-        return cls(**opts)
+    simulate: bool = False
+    verbose: int = 0
+    compat: bool = False
+    ignore: tuple[re.Pattern, ...] = ()
+    defer: tuple[re.Pattern, ...] = ()
+    override: tuple[re.Pattern, ...] = ()
 
 
 @dataclass
-class StowedPathResult:
-    """
-    Result of find_stowed_path() - identifies ownership of a symlink.
+class StowResult:
+    """Result of a stow/unstow/restow operation."""
 
-    This replaces the 3-tuple (pkg_path_from_cwd, stow_path, package)
-    returned by find_stowed_path().
-    """
-
-    pkg_path_from_cwd: str
-    stow_path: str
-    package: str
-
-    @property
-    def is_found(self) -> bool:
-        """Return True if a stowed path was found."""
-        return bool(self.pkg_path_from_cwd)
-
-    def __bool__(self) -> bool:
-        return self.is_found
-
-    def __iter__(self):
-        """For backward compatibility with tuple unpacking."""
-        return iter((self.pkg_path_from_cwd, self.stow_path, self.package))
-
-
-@dataclass
-class ConflictTracker:
-    """
-    Tracks conflicts discovered during stow/unstow planning.
-
-    Conflicts are organized by action (stow/unstow) and package name.
-    """
-
-    _conflicts: dict = field(default_factory=dict)
-    _count: int = 0
-
-    def add(self, action: str, package: str, message: str) -> None:
-        """Record a conflict."""
-        self._conflicts.setdefault(action, {}).setdefault(package, []).append(message)
-        self._count += 1
-
-    @property
-    def count(self) -> int:
-        """Return the total number of conflicts."""
-        return self._count
-
-    def get_all(self) -> dict:
-        """Return conflicts as a nested dict."""
-        return self._conflicts
-
-    def __bool__(self) -> bool:
-        return self._count > 0
-
-    def __contains__(self, action: str) -> bool:
-        return action in self._conflicts
-
-    def __getitem__(self, action: str) -> dict:
-        return self._conflicts.get(action, {})
+    success: bool
+    conflicts: dict[str, list[str]]  # Empty if success
+    tasks: list[Task]  # Tasks that were (or would be) performed

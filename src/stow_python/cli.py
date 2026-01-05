@@ -10,59 +10,146 @@ configuration file handling, and the main entry point.
 """
 
 from __future__ import annotations
-
+import itertools
 import os
 import pwd
 import re
 import shlex
 import sys
+import traceback
+from typing import Sequence
 
-from stow_python.stow import Stow
-from stow_python.util import VERSION, PROGRAM_NAME, error, parent
+from stow_python.stow import _Stower
+from stow_python.types import StowError, StowProgrammingError, StowCLIError, StowConfig
+from stow_python.util import VERSION, PROGRAM_NAME, parent
 
 
 def main() -> None:
     """Main entry point for stow command."""
+    try:
+        _main()
+    except StowProgrammingError as e:
+        print(
+            f"\n{PROGRAM_NAME}: INTERNAL ERROR: {e.message}\n{traceback.format_exc()}",
+            file=sys.stderr,
+        )
+        print(
+            "This _is_ a bug. Please submit a bug report so we can fix it! :-)",
+            file=sys.stderr,
+        )
+        print(
+            "See https://github.com/isarandi/stow-python for how to do this.",
+            file=sys.stderr,
+        )
+        sys.exit(e.errno)
+    except StowCLIError as e:
+        print(e.message, file=sys.stderr)
+        sys.exit(e.errno)
+    except StowError as e:
+        print(f"{PROGRAM_NAME}: ERROR: {e.message}", file=sys.stderr)
+        sys.exit(e.errno)
+
+
+def _main() -> None:
+    """Main implementation (can raise StowError)."""
     options, pkgs_to_unstow, pkgs_to_stow = process_options()
 
-    stow = Stow(**options)
+    # Build StowConfig from parsed options
+    config = StowConfig(
+        dir=options.get("dir", "."),
+        target=options.get("target"),
+        dotfiles=options.get("dotfiles", False),
+        adopt=options.get("adopt", False),
+        no_folding=options.get("no-folding", False),
+        simulate=options.get("simulate", False),
+        verbose=options.get("verbose", 0),
+        compat=options.get("compat", False),
+        ignore=tuple(options.get("ignore", [])),
+        defer=tuple(options.get("defer", [])),
+        override=tuple(options.get("override", [])),
+    )
 
-    stow.plan_unstow(*pkgs_to_unstow)
-    stow.plan_stow(*pkgs_to_stow)
+    stower = _Stower(config)
+    stower.plan_unstow(pkgs_to_unstow)
+    stower.plan_stow(pkgs_to_stow)
 
-    conflicts = stow.get_conflicts()
-
-    if conflicts:
-        for action in ("unstow", "stow"):
-            if action not in conflicts:
-                continue
-            for package in sorted(conflicts[action].keys()):
-                print(
-                    f"WARNING! {action}ing {package} would cause conflicts:",
-                    file=sys.stderr,
-                )
-                for message in sorted(conflicts[action][package]):
-                    print(f"  * {message}", file=sys.stderr)
+    if stower.conflicts:
+        for package in sorted(stower.conflicts.keys()):
+            print(
+                f"WARNING! stowing {package} would cause conflicts:",
+                file=sys.stderr,
+            )
+            for message in sorted(stower.conflicts[package]):
+                print(f"  * {message}", file=sys.stderr)
         print("All operations aborted.", file=sys.stderr)
         sys.exit(1)
     else:
-        if options.get("simulate"):
+        if config.simulate:
             print(
                 "WARNING: in simulation mode so not modifying filesystem.",
                 file=sys.stderr,
             )
             return
 
-        stow.process_tasks()
+        stower.process_tasks()
+
+
+def _parse_bundled_options(
+    chars: str, options: dict, action: str
+) -> tuple[str, bool, bool, bool]:
+    """Parse bundled short options like -npvS.
+
+    Returns (action, has_any_unknown_options, should_show_help, should_show_version).
+    """
+    has_any_unknown_options = False
+    should_show_help = False
+    should_show_version = False
+    i = 0
+
+    while i < len(chars):
+        char = chars[i]
+        rest = chars[i + 1 :]
+
+        match char:
+            case "n":
+                options["simulate"] = True
+            case "p":
+                options["compat"] = True
+            case "v" if (m := re.match(r"\d+", rest)):
+                options["verbose"] = int(m.group())
+                i += len(m.group())
+            case "v":
+                options["verbose"] = options.get("verbose", 0) + 1
+            case "S":
+                action = "stow"
+            case "D":
+                action = "unstow"
+            case "R":
+                action = "restow"
+            case "h":
+                should_show_help = True
+            case "V":
+                should_show_version = True
+            case "d" | "t" if rest:
+                options["dir" if char == "d" else "target"] = rest
+                i += len(rest)
+            case "d" | "t":
+                show_usage_and_exit(f"Option {char} requires an argument")
+            case _:
+                print(f"Unknown option: {char}", file=sys.stderr)
+                # Perl stops after first unknown option in a bundle
+                return action, True, should_show_help, should_show_version
+        i += 1
+
+    return action, has_any_unknown_options, should_show_help, should_show_version
 
 
 def process_options() -> tuple[dict, list[str], list[str]]:
-    """
-    Parse and process command line and .stowrc file options.
+    """Parse and process command line and .stowrc file options.
 
     Returns: (options, pkgs_to_unstow, pkgs_to_stow)
     """
-    cli_options, pkgs_to_unstow, pkgs_to_stow = parse_options(sys.argv[1:])
+    cli_options, pkgs_to_unstow, pkgs_to_stow = parse_cli_options(sys.argv[1:])
     rc_options, _, _ = get_config_file_options()
 
     # Merge .stowrc and command line options
@@ -81,9 +168,8 @@ def process_options() -> tuple[dict, list[str], list[str]]:
     return (options, pkgs_to_unstow, pkgs_to_stow)
 
 
-def parse_options(args: list[str]) -> tuple[dict, list[str], list[str]]:
-    """
-    Parse command line options.
+def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
+    """Parse command line options.
 
     Returns: (options, pkgs_to_unstow, pkgs_to_stow)
     """
@@ -148,15 +234,15 @@ def parse_options(args: list[str]) -> tuple[dict, list[str], list[str]]:
 
         # Boolean flags
         elif arg in ("-n", "--no", "--simulate"):
-            options["simulate"] = 1
+            options["simulate"] = True
         elif arg in ("-p", "--compat"):
-            options["compat"] = 1
+            options["compat"] = True
         elif arg == "--adopt":
-            options["adopt"] = 1
+            options["adopt"] = True
         elif arg == "--no-folding":
-            options["no-folding"] = 1
+            options["no-folding"] = True
         elif arg == "--dotfiles":
-            options["dotfiles"] = 1
+            options["dotfiles"] = True
 
         # Action flags
         elif arg in ("-D", "--delete"):
@@ -168,12 +254,17 @@ def parse_options(args: list[str]) -> tuple[dict, list[str], list[str]]:
 
         # Help and version
         elif arg in ("-h", "--help"):
-            usage()
+            show_usage_and_exit()
         elif arg in ("-V", "--version"):
-            version()
+            show_version_and_exit()
 
-        # Package argument
-        elif not arg.startswith("-"):
+        # Support +n for simulate (backwards compat with Perl's Getopt::Long)
+        elif arg == "+n":
+            print("Warning: +n is deprecated, use -n instead", file=sys.stderr)
+            options["simulate"] = True
+
+        # Package argument (including "-" which is a valid package name)
+        elif not arg.startswith("-") or arg == "-":
             match action:
                 case "restow":
                     pkgs_to_unstow.append(arg)
@@ -183,10 +274,22 @@ def parse_options(args: list[str]) -> tuple[dict, list[str], list[str]]:
                 case _:
                     pkgs_to_stow.append(arg)
 
+        elif arg.startswith("--"):
+            # Unknown long option
+            opt_name = arg[2:]
+            show_usage_and_exit(f"Unknown option: {opt_name}")
+
         else:
-            opt_name = arg.lstrip("-")
-            print(f"Unknown option: {opt_name}", file=sys.stderr)
-            usage(exit_code=1)
+            # Bundled short options: -xyz is parsed as -x -y -z
+            action, has_any_unknown_options, should_show_help, should_show_version = (
+                _parse_bundled_options(arg[1:], options, action)
+            )
+            if has_any_unknown_options:
+                show_usage_and_exit(exit_code=1)
+            if should_show_help:
+                show_usage_and_exit()
+            if should_show_version:
+                show_version_and_exit()
 
         i += 1
 
@@ -196,60 +299,57 @@ def parse_options(args: list[str]) -> tuple[dict, list[str], list[str]]:
 def sanitize_path_options(options: dict) -> None:
     """Validate and set defaults for dir and target options."""
     if "dir" not in options:
-        stow_dir_env = os.environ.get("STOW_DIR", "")
+        stow_dir_env = os.environ.get("STOW_DIR")
         options["dir"] = stow_dir_env if stow_dir_env else os.getcwd()
 
     if not os.path.isdir(options["dir"]):
-        usage(f"--dir value '{options['dir']}' is not a valid directory")
+        show_usage_and_exit(f"{PROGRAM_NAME}: --dir value '{options['dir']}' is not a valid directory\n")
 
     if "target" in options:
         if not os.path.isdir(options["target"]):
-            usage(f"--target value '{options['target']}' is not a valid directory")
+            show_usage_and_exit(f"{PROGRAM_NAME}: --target value '{options['target']}' is not a valid directory\n")
     else:
         target = parent(options["dir"])
         options["target"] = target if target else "."
 
 
-def check_packages(pkgs_to_stow: list[str], pkgs_to_unstow: list[str]) -> None:
+def check_packages(pkgs_to_stow: Sequence[str], pkgs_to_unstow: Sequence[str]) -> None:
     """Validate package names."""
     if not pkgs_to_stow and not pkgs_to_unstow:
-        usage("No packages to stow or unstow")
+        show_usage_and_exit(f"{PROGRAM_NAME}: No packages to stow or unstow\n")
 
-    for package in list(pkgs_to_stow) + list(pkgs_to_unstow):
+    for package in itertools.chain(pkgs_to_stow, pkgs_to_unstow):
         package = package.rstrip("/")
         if "/" in package:
-            error("Slashes are not permitted in package names")
+            raise StowError("Slashes are not permitted in package names")
 
 
 def get_config_file_options() -> tuple[dict, list[str], list[str]]:
-    """
-    Search for default settings in any .stowrc files.
+    """Search for default settings in any .stowrc files.
 
     Returns: (rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow)
     """
     defaults: list[str] = []
-    dirlist = [".stowrc"]
+    stowrc_candidate_paths = [".stowrc"]
 
     home = os.environ.get("HOME")
     if home:
-        dirlist.insert(0, os.path.join(home, ".stowrc"))
+        stowrc_candidate_paths.insert(0, os.path.join(home, ".stowrc"))
 
-    for file_path in dirlist:
+    for file_path in stowrc_candidate_paths:
         if os.path.isfile(file_path) and os.access(file_path, os.R_OK):
             try:
                 with open(file_path, "r") as f:
                     for line in f:
                         line = line.rstrip("\n\r")
                         try:
-                            words = shlex.split(line)
-                            defaults.extend(words)
+                            defaults.extend(shlex.split(line))
                         except ValueError:
                             defaults.extend(line.split())
             except IOError:
-                print(f"Could not open {file_path} for reading", file=sys.stderr)
-                sys.exit(1)
+                raise StowCLIError(f"Could not open {file_path} for reading")
 
-    rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow = parse_options(defaults)
+    rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow = parse_cli_options(defaults)
 
     if "target" in rc_options:
         rc_options["target"] = expand_filepath(rc_options["target"], "--target option")
@@ -261,36 +361,34 @@ def get_config_file_options() -> tuple[dict, list[str], list[str]]:
 
 def expand_filepath(path: str, source: str) -> str:
     """Expand environment variables and tilde in file paths."""
-    path = expand_environment(path, source)
-    path = expand_tilde(path)
+    path = expand_environment_variables(path, source)
+    path = expand_tilde_to_homedir(path)
     return path
 
 
-def expand_environment(path: str, source: str) -> str:
-    """
-    Expand environment variables.
+def expand_environment_variables(path: str, source: str) -> str:
+    """Expand environment variables in path.
 
     Replace non-escaped $VAR and ${VAR} with os.environ[VAR].
     """
 
     def replace_var(match):
-        var = match.group(1) or match.group(2)
-        if var not in os.environ:
-            print(
-                f"{source} references undefined environment variable ${var}; aborting!",
-                file=sys.stderr,
+        var = match.group(1)
+        try:
+            return os.environ[var]
+        except KeyError:
+            raise StowCLIError(
+                f"{source} references undefined environment variable ${var}; aborting!"
             )
-            sys.exit(1)
-        return os.environ[var]
 
-    path = re.sub(r"(?<!\\)\$\{([^}]+)\}", replace_var, path)
+    path = re.sub(r"(?<!\\)\$\{([^}]+)}", replace_var, path)
     path = re.sub(r"(?<!\\)\$(\w+)", replace_var, path)
     path = path.replace("\\$", "$")
 
     return path
 
 
-def expand_tilde(path: str) -> str:
+def expand_tilde_to_homedir(path: str) -> str:
     """Expand tilde to user's home directory path."""
     if "\\~" in path:
         return path.replace("\\~", "~")
@@ -298,31 +396,39 @@ def expand_tilde(path: str) -> str:
     if not path.startswith("~"):
         return path
 
-    match = re.match(r"^~([^/]*)", path)
-    if match:
-        user = match.group(1)
-        if user:
-            try:
-                home = pwd.getpwnam(user)[5]
-            except KeyError:
-                return path
-        else:
-            home = os.environ.get("HOME") or os.environ.get("LOGDIR")
-            if not home:
-                try:
-                    home = pwd.getpwuid(os.getuid())[5]
-                except KeyError:
-                    return path
+    # Split ~username/rest into parts
+    tilde_part, slash, rest = path.partition("/")
+    username = tilde_part.removeprefix("~")
 
-        path = home + path[len(match.group(0)) :]
+    if username:
+        home = get_homedir_from_passwd(username=username)
+    else:
+        home = (
+                os.environ.get("HOME")
+                or os.environ.get("LOGDIR")
+                or get_homedir_from_passwd()
+        )
 
-    return path
+    if not home:
+        return path
+    return home + slash + rest
 
 
-def usage(msg: str | None = None, exit_code: int | None = None) -> None:
+def get_homedir_from_passwd(username: str | None = None, uid: int | None = None) -> str | None:
+    try:
+        if username is not None:
+            return pwd.getpwnam(username).pw_dir
+        if uid is not None:
+            return pwd.getpwuid(uid).pw_dir
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except KeyError:
+        return None
+
+
+def show_usage_and_exit(msg: str | None = None, exit_code: int | None = None) -> None:
     """Print program usage message and exit."""
     if msg:
-        print(f"{PROGRAM_NAME}: {msg}\n", file=sys.stderr)
+        print(msg, file=sys.stderr)
 
     print(f"""{PROGRAM_NAME} (Stow-Python) version {VERSION}
 
@@ -370,7 +476,7 @@ Report deviations from GNU Stow: <https://github.com/isarandi/stow-python/issues
         sys.exit(0)
 
 
-def version() -> None:
+def show_version_and_exit() -> None:
     """Print version and exit."""
     print(f"{PROGRAM_NAME} (Stow-Python) version {VERSION}")
     sys.exit(0)

@@ -24,24 +24,24 @@ from testutil import parent
 
 def test_no_leading_or_trailing_slash():
     """no leading or trailing /"""
-    assert parent('a/b/c') == 'a/b'
+    assert parent("a/b/c") == "a/b"
 
 
 def test_leading_slash():
     """leading /"""
-    assert parent('/a/b/c') == '/a/b'
+    assert parent("/a/b/c") == "/a/b"
 
 
 def test_trailing_slash():
     """trailing /"""
-    assert parent('a/b/c/') == 'a/b'
+    assert parent("a/b/c/") == "a/b"
 
 
 def test_multiple_slashes():
     """multiple /"""
-    assert parent('/////a///b///c///') == '/a/b'
+    assert parent("/////a///b///c///") == "/a/b"
 
 
 def test_empty_parent():
     """empty parent"""
-    assert parent('a') == ''
+    assert parent("a") == ""

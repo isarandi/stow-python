@@ -25,12 +25,19 @@ import tempfile
 import pytest
 
 from testutil import (
-    new_Stow, make_path, make_file,
-    setup_global_ignore, setup_package_ignore,
-    stow_module, join_paths,
+    count_conflicts,
+    new_Stow,
+    make_path,
+    make_file,
+    setup_global_ignore,
+    setup_package_ignore,
+    stow_module,
+    join_paths,
 )
+
 LOCAL_IGNORE_FILE = stow_module.LOCAL_IGNORE_FILE
 GLOBAL_IGNORE_FILE = stow_module.GLOBAL_IGNORE_FILE
+_read_ignore_file = stow_module._read_ignore_file
 
 
 def check_ignores(stow, stow_path, package, context, tests):
@@ -45,73 +52,103 @@ def check_ignores(stow, stow_path, package, context, tests):
         tests: list of (path, should_ignore) tuples
     """
     for path, should_ignore in tests:
-        not_str = '' if should_ignore else ' not'
-        was_ignored = stow.ignore(stow_path, package, path)
-        assert was_ignored == should_ignore, "Should%s ignore %s %s" % (not_str, path, context)
+        not_str = "" if should_ignore else " not"
+        was_ignored = stow._should_ignore(stow_path, package, path)
+        assert was_ignored == should_ignore, "Should%s ignore %s %s" % (
+            not_str,
+            path,
+            context,
+        )
 
 
-def check_local_ignore_list_always_ignored_at_top_level(stow, stow_path, package, context):
+def check_local_ignore_list_always_ignored_at_top_level(
+    stow, stow_path, package, context
+):
     """Local ignore file should always be ignored at top level but not in subdirs."""
-    check_ignores(stow, stow_path, package, context, [
-        (LOCAL_IGNORE_FILE, True),
-        ("subdir/" + LOCAL_IGNORE_FILE, False),
-    ])
+    check_ignores(
+        stow,
+        stow_path,
+        package,
+        context,
+        [
+            (LOCAL_IGNORE_FILE, True),
+            ("subdir/" + LOCAL_IGNORE_FILE, False),
+        ],
+    )
 
 
 def check_built_in_list(stow, stow_path, package, context, expect_ignores):
     """Test built-in ignore patterns."""
     # Test CVS, .cvsignore, #autosave# patterns
-    for ignored in ['CVS', '.cvsignore', '#autosave#']:
+    for ignored in ["CVS", ".cvsignore", "#autosave#"]:
         for path in [ignored, "foo/bar/" + ignored]:
             suffix = path + ".suffix"
             # Create prefix version: 'CVS' -> 'prefix.CVS', 'foo/bar/CVS' -> 'foo/bar/prefix.CVS'
-            parts = path.rsplit('/', 1)
+            parts = path.rsplit("/", 1)
             if len(parts) == 2:
                 prefix = parts[0] + "/prefix." + parts[1]
             else:
                 prefix = "prefix." + parts[0]
 
-            check_ignores(stow, stow_path, package, context, [
-                (path, expect_ignores),
-                (prefix, False),
-                (suffix, False),
-            ])
+            check_ignores(
+                stow,
+                stow_path,
+                package,
+                context,
+                [
+                    (path, expect_ignores),
+                    (prefix, False),
+                    (suffix, False),
+                ],
+            )
 
     # The pattern catching lock files allows suffixes but not prefixes
-    for ignored in ['.#lock-file']:
+    for ignored in [".#lock-file"]:
         for path in [ignored, "foo/bar/" + ignored]:
             suffix = path + ".suffix"
-            parts = path.rsplit('/', 1)
+            parts = path.rsplit("/", 1)
             if len(parts) == 2:
                 prefix = parts[0] + "/prefix." + parts[1]
             else:
                 prefix = "prefix." + parts[0]
 
-            check_ignores(stow, stow_path, package, context, [
-                (path, expect_ignores),
-                (prefix, False),
-                (suffix, expect_ignores),
-            ])
+            check_ignores(
+                stow,
+                stow_path,
+                package,
+                context,
+                [
+                    (path, expect_ignores),
+                    (prefix, False),
+                    (suffix, expect_ignores),
+                ],
+            )
 
 
 def check_user_global_list(stow, stow_path, package, context, expect_ignores):
     """Test user's global ignore patterns."""
-    for path_prefix in ['', 'foo/bar/']:
-        check_ignores(stow, stow_path, package, context, [
-            (path_prefix + "exact", expect_ignores),
-            (path_prefix + "0exact", False),
-            (path_prefix + "exact1", False),
-            (path_prefix + "0exact1", False),
-            (path_prefix + "substring", False),
-            (path_prefix + "0substring", False),
-            (path_prefix + "substring1", False),
-            (path_prefix + "0substring1", expect_ignores),
-        ])
+    for path_prefix in ["", "foo/bar/"]:
+        check_ignores(
+            stow,
+            stow_path,
+            package,
+            context,
+            [
+                (path_prefix + "exact", expect_ignores),
+                (path_prefix + "0exact", False),
+                (path_prefix + "exact1", False),
+                (path_prefix + "0exact1", False),
+                (path_prefix + "substring", False),
+                (path_prefix + "0substring", False),
+                (path_prefix + "substring1", False),
+                (path_prefix + "0substring1", expect_ignores),
+            ],
+        )
 
 
 def do_setup_user_global_list():
     """Set up user's global ignore list in a temp home directory."""
-    os.environ['HOME'] = tempfile.mkdtemp()
+    os.environ["HOME"] = tempfile.mkdtemp()
     setup_global_ignore("""\
 exact
 .+substring.+ # here's a comment
@@ -120,12 +157,12 @@ myprefix.+       #hi mum
 """)
 
 
-def do_setup_package_local_list(stow, stow_path, package, contents):
+def do_setup_package_local_list(stow_path, package, contents):
     """Set up package-local ignore list."""
     package_path = join_paths(stow_path, package)
     make_path(package_path)
     package_ignore = setup_package_ignore(package_path, contents)
-    stow.invalidate_memoized_regexp(package_ignore)
+    _read_ignore_file.cache_clear()
     return package_ignore
 
 
@@ -134,15 +171,17 @@ class TestIgnoreBuiltInList:
 
     def test_local_ignore_always_ignored_at_top_level(self, stow_test_env):
         stow = new_Stow()
-        stow_path = '../stow'
-        package = 'non-existent-package'
+        stow_path = "../stow"
+        package = "non-existent-package"
         context = "when using built-in list"
-        check_local_ignore_list_always_ignored_at_top_level(stow, stow_path, package, context)
+        check_local_ignore_list_always_ignored_at_top_level(
+            stow, stow_path, package, context
+        )
 
     def test_built_in_patterns(self, stow_test_env):
         stow = new_Stow()
-        stow_path = '../stow'
-        package = 'non-existent-package'
+        stow_path = "../stow"
+        package = "non-existent-package"
         context = "when using built-in list"
         check_built_in_list(stow, stow_path, package, context, expect_ignores=True)
 
@@ -153,22 +192,25 @@ class TestIgnoreUserGlobalList:
     @pytest.fixture(autouse=True)
     def setup_global_list(self, stow_test_env):
         self.stow = new_Stow()
-        self.stow_path = '../stow'
+        self.stow_path = "../stow"
         do_setup_user_global_list()
-        self.package = 'non-existent-package'
+        self.package = "non-existent-package"
         self.context = "when using ~/" + GLOBAL_IGNORE_FILE
 
     def test_local_ignore_always_ignored_at_top_level(self):
         check_local_ignore_list_always_ignored_at_top_level(
-            self.stow, self.stow_path, self.package, self.context)
+            self.stow, self.stow_path, self.package, self.context
+        )
 
     def test_built_in_patterns_disabled(self):
         check_built_in_list(
-            self.stow, self.stow_path, self.package, self.context, expect_ignores=False)
+            self.stow, self.stow_path, self.package, self.context, expect_ignores=False
+        )
 
     def test_user_global_patterns(self):
         check_user_global_list(
-            self.stow, self.stow_path, self.package, self.context, expect_ignores=True)
+            self.stow, self.stow_path, self.package, self.context, expect_ignores=True
+        )
 
 
 class TestIgnoreEmptyPackageLocalList:
@@ -177,34 +219,44 @@ class TestIgnoreEmptyPackageLocalList:
     @pytest.fixture(autouse=True)
     def setup_empty_local_list(self, stow_test_env):
         self.stow = new_Stow()
-        self.stow_path = '../stow'
+        self.stow_path = "../stow"
         do_setup_user_global_list()
-        self.package = 'ignorepkg'
+        self.package = "ignorepkg"
         self.local_ignore = do_setup_package_local_list(
-            self.stow, self.stow_path, self.package, "")
+            self.stow_path, self.package, ""
+        )
         self.context = "when using empty " + self.local_ignore
 
     def test_local_ignore_always_ignored_at_top_level(self):
         check_local_ignore_list_always_ignored_at_top_level(
-            self.stow, self.stow_path, self.package, self.context)
+            self.stow, self.stow_path, self.package, self.context
+        )
 
     def test_built_in_patterns_disabled(self):
         check_built_in_list(
-            self.stow, self.stow_path, self.package, self.context, expect_ignores=False)
+            self.stow, self.stow_path, self.package, self.context, expect_ignores=False
+        )
 
     def test_user_global_patterns_disabled(self):
         check_user_global_list(
-            self.stow, self.stow_path, self.package, self.context, expect_ignores=False)
+            self.stow, self.stow_path, self.package, self.context, expect_ignores=False
+        )
 
     def test_nothing_ignored(self):
-        check_ignores(self.stow, self.stow_path, self.package, self.context, [
-            ('random', False),
-            ('foo2/bar', False),
-            ('foo2/bars', False),
-            ('foo2/bar/random', False),
-            ('foo2/bazqux', False),
-            ('xfoo2/bazqux', False),
-        ])
+        check_ignores(
+            self.stow,
+            self.stow_path,
+            self.package,
+            self.context,
+            [
+                ("random", False),
+                ("foo2/bar", False),
+                ("foo2/bars", False),
+                ("foo2/bar/random", False),
+                ("foo2/bazqux", False),
+                ("xfoo2/bazqux", False),
+            ],
+        )
 
 
 class TestIgnorePackageLocalSegmentRegexps:
@@ -213,34 +265,46 @@ class TestIgnorePackageLocalSegmentRegexps:
     @pytest.fixture(autouse=True)
     def setup_local_list(self, stow_test_env):
         self.stow = new_Stow()
-        self.stow_path = '../stow'
+        self.stow_path = "../stow"
         do_setup_user_global_list()
-        self.package = 'ignorepkg'
+        self.package = "ignorepkg"
         self.local_ignore = do_setup_package_local_list(
-            self.stow, self.stow_path, self.package, "random\n")
-        self.context = "when using %s with only path segment regexps" % self.local_ignore
+            self.stow_path, self.package, "random\n"
+        )
+        self.context = (
+            "when using %s with only path segment regexps" % self.local_ignore
+        )
 
     def test_local_ignore_always_ignored_at_top_level(self):
         check_local_ignore_list_always_ignored_at_top_level(
-            self.stow, self.stow_path, self.package, self.context)
+            self.stow, self.stow_path, self.package, self.context
+        )
 
     def test_built_in_patterns_disabled(self):
         check_built_in_list(
-            self.stow, self.stow_path, self.package, self.context, expect_ignores=False)
+            self.stow, self.stow_path, self.package, self.context, expect_ignores=False
+        )
 
     def test_user_global_patterns_disabled(self):
         check_user_global_list(
-            self.stow, self.stow_path, self.package, self.context, expect_ignores=False)
+            self.stow, self.stow_path, self.package, self.context, expect_ignores=False
+        )
 
     def test_segment_pattern_matches(self):
-        check_ignores(self.stow, self.stow_path, self.package, self.context, [
-            ('random', True),
-            ('foo2/bar', False),
-            ('foo2/bars', False),
-            ('foo2/bar/random', True),
-            ('foo2/bazqux', False),
-            ('xfoo2/bazqux', False),
-        ])
+        check_ignores(
+            self.stow,
+            self.stow_path,
+            self.package,
+            self.context,
+            [
+                ("random", True),
+                ("foo2/bar", False),
+                ("foo2/bars", False),
+                ("foo2/bar/random", True),
+                ("foo2/bazqux", False),
+                ("xfoo2/bazqux", False),
+            ],
+        )
 
 
 class TestIgnorePackageLocalFullPathRegexps:
@@ -249,34 +313,44 @@ class TestIgnorePackageLocalFullPathRegexps:
     @pytest.fixture(autouse=True)
     def setup_local_list(self, stow_test_env):
         self.stow = new_Stow()
-        self.stow_path = '../stow'
+        self.stow_path = "../stow"
         do_setup_user_global_list()
-        self.package = 'ignorepkg'
+        self.package = "ignorepkg"
         self.local_ignore = do_setup_package_local_list(
-            self.stow, self.stow_path, self.package, "foo2/bar\n")
+            self.stow_path, self.package, "foo2/bar\n"
+        )
         self.context = "when using %s with only full path regexps" % self.local_ignore
 
     def test_local_ignore_always_ignored_at_top_level(self):
         check_local_ignore_list_always_ignored_at_top_level(
-            self.stow, self.stow_path, self.package, self.context)
+            self.stow, self.stow_path, self.package, self.context
+        )
 
     def test_built_in_patterns_disabled(self):
         check_built_in_list(
-            self.stow, self.stow_path, self.package, self.context, expect_ignores=False)
+            self.stow, self.stow_path, self.package, self.context, expect_ignores=False
+        )
 
     def test_user_global_patterns_disabled(self):
         check_user_global_list(
-            self.stow, self.stow_path, self.package, self.context, expect_ignores=False)
+            self.stow, self.stow_path, self.package, self.context, expect_ignores=False
+        )
 
     def test_full_path_pattern_matches(self):
-        check_ignores(self.stow, self.stow_path, self.package, self.context, [
-            ('random', False),
-            ('foo2/bar', True),
-            ('foo2/bars', False),
-            ('foo2/bar/random', True),
-            ('foo2/bazqux', False),
-            ('xfoo2/bazqux', False),
-        ])
+        check_ignores(
+            self.stow,
+            self.stow_path,
+            self.package,
+            self.context,
+            [
+                ("random", False),
+                ("foo2/bar", True),
+                ("foo2/bars", False),
+                ("foo2/bar/random", True),
+                ("foo2/bazqux", False),
+                ("xfoo2/bazqux", False),
+            ],
+        )
 
 
 class TestIgnorePackageLocalMixedRegexps:
@@ -285,38 +359,50 @@ class TestIgnorePackageLocalMixedRegexps:
     @pytest.fixture(autouse=True)
     def setup_local_list(self, stow_test_env):
         self.stow = new_Stow()
-        self.stow_path = '../stow'
+        self.stow_path = "../stow"
         do_setup_user_global_list()
-        self.package = 'ignorepkg'
+        self.package = "ignorepkg"
         self.local_ignore = do_setup_package_local_list(
-            self.stow, self.stow_path, self.package, """\
+            self.stow_path,
+            self.package,
+            """\
 foo2/bar
 random
 foo2/baz.+
-""")
+""",
+        )
         self.context = "when using %s with mixture of regexps" % self.local_ignore
 
     def test_local_ignore_always_ignored_at_top_level(self):
         check_local_ignore_list_always_ignored_at_top_level(
-            self.stow, self.stow_path, self.package, self.context)
+            self.stow, self.stow_path, self.package, self.context
+        )
 
     def test_built_in_patterns_disabled(self):
         check_built_in_list(
-            self.stow, self.stow_path, self.package, self.context, expect_ignores=False)
+            self.stow, self.stow_path, self.package, self.context, expect_ignores=False
+        )
 
     def test_user_global_patterns_disabled(self):
         check_user_global_list(
-            self.stow, self.stow_path, self.package, self.context, expect_ignores=False)
+            self.stow, self.stow_path, self.package, self.context, expect_ignores=False
+        )
 
     def test_mixed_pattern_matches(self):
-        check_ignores(self.stow, self.stow_path, self.package, self.context, [
-            ('random', True),
-            ('foo2/bar', True),
-            ('foo2/bars', False),
-            ('foo2/bar/random', True),
-            ('foo2/bazqux', True),
-            ('xfoo2/bazqux', False),
-        ])
+        check_ignores(
+            self.stow,
+            self.stow_path,
+            self.package,
+            self.context,
+            [
+                ("random", True),
+                ("foo2/bar", True),
+                ("foo2/bars", False),
+                ("foo2/bar/random", True),
+                ("foo2/bazqux", True),
+                ("xfoo2/bazqux", False),
+            ],
+        )
 
 
 class TestIgnoreExamplesFromManual:
@@ -325,34 +411,52 @@ class TestIgnoreExamplesFromManual:
     @pytest.fixture(autouse=True)
     def setup_env(self, stow_test_env):
         self.stow = new_Stow()
-        self.stow_path = '../stow'
-        self.package = 'ignorepkg'
+        self.stow_path = "../stow"
+        self.package = "ignorepkg"
         self.context = "(example from manual)"
 
-    @pytest.mark.parametrize("regex", [
-        'bazqux',
-        'baz.*',
-        '.*qux',
-        'bar/.*x',
-        '^/foo/.*qux',
-    ])
+    @pytest.mark.parametrize(
+        "regex",
+        [
+            "bazqux",
+            "baz.*",
+            ".*qux",
+            "bar/.*x",
+            "^/foo/.*qux",
+        ],
+    )
     def test_patterns_that_match(self, regex):
-        do_setup_package_local_list(self.stow, self.stow_path, self.package, regex + "\n")
-        check_ignores(self.stow, self.stow_path, self.package, self.context, [
-            ("foo/bar/bazqux", True),
-        ])
+        do_setup_package_local_list(self.stow_path, self.package, regex + "\n")
+        check_ignores(
+            self.stow,
+            self.stow_path,
+            self.package,
+            self.context,
+            [
+                ("foo/bar/bazqux", True),
+            ],
+        )
 
-    @pytest.mark.parametrize("regex", [
-        'bar',
-        'baz',
-        'qux',
-        'o/bar/b',
-    ])
+    @pytest.mark.parametrize(
+        "regex",
+        [
+            "bar",
+            "baz",
+            "qux",
+            "o/bar/b",
+        ],
+    )
     def test_patterns_that_dont_match(self, regex):
-        do_setup_package_local_list(self.stow, self.stow_path, self.package, regex + "\n")
-        check_ignores(self.stow, self.stow_path, self.package, self.context, [
-            ("foo/bar/bazqux", False),
-        ])
+        do_setup_package_local_list(self.stow_path, self.package, regex + "\n")
+        check_ignores(
+            self.stow,
+            self.stow_path,
+            self.package,
+            self.context,
+            [
+                ("foo/bar/bazqux", False),
+            ],
+        )
 
 
 class TestIgnoreInvalidRegexp:
@@ -361,8 +465,8 @@ class TestIgnoreInvalidRegexp:
     @pytest.fixture(autouse=True)
     def setup_env(self, stow_test_env):
         self.stow = new_Stow()
-        self.stow_path = '../stow'
-        self.package = 'ignorepkg'
+        self.stow_path = "../stow"
+        self.package = "ignorepkg"
 
     def test_invalid_segment_regexp(self):
         context = "Invalid segment regexp in list"
@@ -371,11 +475,17 @@ this one's ok
 this one isn't|*!
 but this one is
 """
-        do_setup_package_local_list(self.stow, self.stow_path, self.package, contents)
+        do_setup_package_local_list(self.stow_path, self.package, contents)
         with pytest.raises(Exception, match=r"Failed to compile regexp"):
-            check_ignores(self.stow, self.stow_path, self.package, context, [
-                ("foo/bar/bazqux", True),
-            ])
+            check_ignores(
+                self.stow,
+                self.stow_path,
+                self.package,
+                context,
+                [
+                    ("foo/bar/bazqux", True),
+                ],
+            )
 
     def test_invalid_full_path_regexp(self):
         context = "Invalid full path regexp in list"
@@ -384,11 +494,17 @@ this one's ok
 this/one isn't|*!
 but this one is
 """
-        do_setup_package_local_list(self.stow, self.stow_path, self.package, contents)
+        do_setup_package_local_list(self.stow_path, self.package, contents)
         with pytest.raises(Exception, match=r"Failed to compile regexp"):
-            check_ignores(self.stow, self.stow_path, self.package, context, [
-                ("foo/bar/bazqux", True),
-            ])
+            check_ignores(
+                self.stow,
+                self.stow_path,
+                self.package,
+                context,
+                [
+                    ("foo/bar/bazqux", True),
+                ],
+            )
 
 
 class TestIgnoreViaStow:
@@ -397,32 +513,35 @@ class TestIgnoreViaStow:
     @pytest.fixture(autouse=True)
     def setup_env(self, stow_test_env):
         self.stow = new_Stow()
-        self.stow_path = '../stow'
-        self.package = 'pkg1'
+        self.stow_path = "../stow"
+        self.package = "pkg1"
 
     def test_top_dir_ignored(self):
         make_path("%s/%s/foo/bar" % (self.stow_path, self.package))
         make_file("%s/%s/foo/bar/baz" % (self.stow_path, self.package))
-        do_setup_package_local_list(self.stow, self.stow_path, self.package, 'foo')
-        self.stow.plan_stow(self.package)
-        assert len(self.stow.get_tasks()) == 0, 'top dir ignored'
-        assert self.stow.get_conflict_count() == 0, 'top dir ignored, no conflicts'
+        do_setup_package_local_list(self.stow_path, self.package, "foo")
+        self.stow.plan_stow([self.package])
+        assert len(self.stow.tasks) == 0, "top dir ignored"
+        assert count_conflicts(self.stow) == 0, "top dir ignored, no conflicts"
 
-    @pytest.mark.parametrize("ignore_pattern", [
-        'bar',
-        'foo/bar',
-        '/foo/bar',
-        '^/foo/bar',
-        '^/fo.+ar',
-    ])
+    @pytest.mark.parametrize(
+        "ignore_pattern",
+        [
+            "bar",
+            "foo/bar",
+            "/foo/bar",
+            "^/foo/bar",
+            "^/fo.+ar",
+        ],
+    )
     def test_bar_ignored(self, ignore_pattern):
         make_path("%s/%s/foo/bar" % (self.stow_path, self.package))
         make_file("%s/%s/foo/bar/baz" % (self.stow_path, self.package))
         make_path("foo")
-        do_setup_package_local_list(self.stow, self.stow_path, self.package, ignore_pattern)
-        self.stow.plan_stow(self.package)
-        assert len(self.stow.get_tasks()) == 0, "bar ignored via %s" % ignore_pattern
-        assert self.stow.get_conflict_count() == 0, 'bar ignored, no conflicts'
+        do_setup_package_local_list(self.stow_path, self.package, ignore_pattern)
+        self.stow.plan_stow([self.package])
+        assert len(self.stow.tasks) == 0, "bar ignored via %s" % ignore_pattern
+        assert count_conflicts(self.stow) == 0, "bar ignored, no conflicts"
 
     def test_qux_stowed_bar_ignored(self):
         make_path("%s/%s/foo/bar" % (self.stow_path, self.package))
@@ -431,12 +550,14 @@ class TestIgnoreViaStow:
         # Use '^/fo.+ar' pattern to match Perl test - this is the last pattern
         # tested in the parametrized test_bar_ignored, and the Perl test
         # continues from that state
-        do_setup_package_local_list(self.stow, self.stow_path, self.package, '^/fo.+ar')
+        do_setup_package_local_list(self.stow_path, self.package, "^/fo.+ar")
         make_file("%s/%s/foo/qux" % (self.stow_path, self.package))
-        self.stow.plan_stow(self.package)
+        self.stow.plan_stow([self.package])
         self.stow.process_tasks()
-        assert self.stow.get_conflict_count() == 0, 'no conflicts stowing qux'
+        assert count_conflicts(self.stow) == 0, "no conflicts stowing qux"
         assert not os.path.exists("foo/bar"), "bar ignore prevented stow"
         assert os.path.islink("foo/qux"), "qux not ignored and stowed"
-        assert os.readlink("foo/qux") == "../%s/%s/foo/qux" % (self.stow_path, self.package), \
-            "qux stowed correctly"
+        assert os.readlink("foo/qux") == "../%s/%s/foo/qux" % (
+            self.stow_path,
+            self.package,
+        ), "qux stowed correctly"

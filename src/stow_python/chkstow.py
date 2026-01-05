@@ -1,43 +1,8 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 # Stow-Python - Python reimplementation of GNU Stow
-# Python reimplementation:
-#   Copyright (C) 2025 Istvan Sarandi
-# Original GNU Stow:
-#   Copyright (C) 1993, 1994, 1995, 1996 by Bob Glickstein
-#   Copyright (C) 2000, 2001 Guillaume Morin
-#   Copyright (C) 2007 Kahlil Hodgson
-#   Copyright (C) 2011 Adam Spiers
-#   and others.
-#
-# This file is part of Stow-Python.
-#
-# Stow-Python is free software: you can redistribute it and/or modify it
-# under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Stow-Python is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program. If not, see https://www.gnu.org/licenses/.
+# Copyright (C) 2025 Istvan Sarandi
+# SPDX-License-Identifier: GPL-3.0-or-later
 
-# AUTO-GENERATED from stow_python modules - do not edit directly.
-# Run scripts/build_single_file.py to regenerate.
-
-
-"""
-chkstow - Check stow target directory for problems.
-
-Modes:
-    -b, --badlinks  Report symlinks pointing to non-existent files (default)
-    -a, --aliens    Report non-symlink, non-directory files
-    -l, --list      List packages in the target directory
-"""
+"""chkstow - Check stow target directory for problems."""
 
 from __future__ import annotations
 
@@ -46,6 +11,8 @@ import re
 import sys
 from collections.abc import Iterator
 from enum import Enum, auto
+
+
 class Mode(Enum):
     BAD_LINKS = auto()
     ALIENS = auto()

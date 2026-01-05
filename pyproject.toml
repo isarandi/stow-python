@@ -33,19 +33,16 @@ classifiers = [
 [project.optional-dependencies]
 tests = ["pytest"]
 
+[project.scripts]
+stow = "stow_python:main"
+chkstow = "stow_python.chkstow:main"
+
 [project.urls]
 Homepage = "https://github.com/isarandi/stow-python"
 "GNU Stow" = "https://www.gnu.org/software/stow/"
 
-[tool.setuptools]
-packages = ["pystow"]
-
-[tool.setuptools.package-dir]
-"" = "src"
-
-# Scripts are built from src/pystow modules and placed in bin/
-# by scripts/build_single_file.py - they are not directly edited
-script-files = ["bin/stow", "bin/chkstow"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

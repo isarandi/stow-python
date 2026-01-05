@@ -23,26 +23,76 @@ from __future__ import print_function
 
 import os
 import shutil
-import sys
 
-# Import from the single-file stow script in bin/
-# Use types.ModuleType for Python 2.7 compatibility (no importlib.util)
-import types
-_stow_path = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin', 'stow')
-stow_module = types.ModuleType('stow_module')
-stow_module.__file__ = _stow_path
-# Register module BEFORE exec so dataclass decorators can find it
-sys.modules['stow_module'] = stow_module
-with open(_stow_path) as _f:
-    exec(compile(_f.read(), _stow_path, 'exec'), stow_module.__dict__)
+# Import from the stow_python package
+from stow_python.stow import _Stower, _compile_patterns, _read_ignore_file
+from stow_python.stow import LOCAL_IGNORE_FILE, GLOBAL_IGNORE_FILE
+from stow_python.types import StowConfig, TaskAction  # noqa: F401
+from stow_python.util import (
+    parent,  # noqa: F401 - re-exported for tests
+    canon_path,  # noqa: F401 - re-exported for tests
+    join_paths,
+    adjust_dotfile,
+    unadjust_dotfile,
+)
+from stow_python.cli import (
+    parse_cli_options,
+    process_options,
+    get_config_file_options,
+    expand_environment_variables,
+    expand_tilde_to_homedir,
+    expand_filepath,
+)
 
-Stow = stow_module.Stow
-parent = stow_module.parent
-canon_path = stow_module.canon_path
-join_paths = stow_module.join_paths
 
-TEST_DIR = 'tmp-testing-trees'
+# Create a namespace for tests that use stow_module.X syntax
+class _StowModule:
+    pass
+
+
+stow_module = _StowModule()
+stow_module.LOCAL_IGNORE_FILE = LOCAL_IGNORE_FILE
+stow_module.GLOBAL_IGNORE_FILE = GLOBAL_IGNORE_FILE
+stow_module.adjust_dotfile = adjust_dotfile
+stow_module.unadjust_dotfile = unadjust_dotfile
+stow_module.parse_options = parse_cli_options
+stow_module.process_options = process_options
+stow_module.get_config_file_options = get_config_file_options
+stow_module.expand_environment = expand_environment_variables
+stow_module.expand_tilde = expand_tilde_to_homedir
+stow_module.expand_filepath = expand_filepath
+stow_module._read_ignore_file = _read_ignore_file
+
+
+def Stow(*, dir, target, **kwargs):
+    """Create a _Stower instance with keyword arguments (backward compat for tests)."""
+    # Compile patterns like the old Stow.__init__ did
+    ignore = _compile_patterns(kwargs.get("ignore"), suffix=r"\Z")
+    defer = _compile_patterns(kwargs.get("defer"), prefix=r"\A")
+    override = _compile_patterns(kwargs.get("override"), prefix=r"\A")
+
+    config = StowConfig(
+        dir=dir,
+        target=target,
+        dotfiles=kwargs.get("dotfiles", False),
+        adopt=kwargs.get("adopt", False),
+        no_folding=kwargs.get("no_folding", False),
+        simulate=kwargs.get("simulate", False),
+        verbose=kwargs.get("verbose", 0),
+        compat=kwargs.get("compat", False),
+        ignore=tuple(ignore),
+        defer=tuple(defer),
+        override=tuple(override),
+    )
+    return _Stower(config)
+
+
+def count_conflicts(stow):
+    """Count total conflicts from stow.conflicts dict."""
+    return sum(len(msgs) for msgs in stow.conflicts.values())
+
+
+TEST_DIR = "tmp-testing-trees"
 ABS_TEST_DIR = os.path.abspath(TEST_DIR)
 _original_cwd = None
 
@@ -65,8 +115,11 @@ def init_test_dirs(test_dir=None):
         abs_test_dir = os.path.abspath(test_dir)
     else:
         # Handle pathlib.Path from pytest's tmp_path
-        abs_test_dir = (str(test_dir) if hasattr(test_dir, '__fspath__')
-                        else os.path.abspath(test_dir))
+        abs_test_dir = (
+            str(test_dir)
+            if hasattr(test_dir, "__fspath__")
+            else os.path.abspath(test_dir)
+        )
         test_dir = abs_test_dir
 
     ABS_TEST_DIR = abs_test_dir
@@ -80,7 +133,7 @@ def init_test_dirs(test_dir=None):
         os.makedirs(path)
 
     # Don't let user's ~/.stow-global-ignore affect test results
-    os.environ['HOME'] = abs_test_dir
+    os.environ["HOME"] = abs_test_dir
 
     return abs_test_dir
 
@@ -96,29 +149,48 @@ def cleanup_test_dirs():
         _original_cwd = None
 
 
+def _get_test_verbosity():
+    """Get verbosity level for tests from TEST_VERBOSE env var."""
+    test_verbose = os.environ.get("TEST_VERBOSE", "")
+    if not test_verbose:
+        return 0
+    try:
+        return int(test_verbose)
+    except ValueError:
+        return 3
+
+
 def new_Stow(**opts):
     """
     Create a new Stow instance with test defaults.
     These default paths assume that execution will be triggered from
     within the target directory.
     """
-    if 'dir' not in opts:
-        opts['dir'] = '../stow'
-    if 'target' not in opts:
-        opts['target'] = '.'
-    opts['test_mode'] = 1
+    if "dir" not in opts:
+        opts["dir"] = "../stow"
+    if "target" not in opts:
+        opts["target"] = "."
+
+    # Set verbosity from TEST_VERBOSE env var if not explicitly provided
+    if "verbose" not in opts:
+        opts["verbose"] = _get_test_verbosity()
+
+    # Translate hyphenated option keys to underscores for Stow constructor
+    opts = {k.replace("-", "_"): v for k, v in opts.items()}
 
     try:
         stow = Stow(**opts)
     except Exception as e:
-        raise RuntimeError("Error while trying to instantiate new Stow(%s): %s" % (opts, e))
+        raise RuntimeError(
+            "Error while trying to instantiate new Stow(%s): %s" % (opts, e)
+        )
 
     return stow
 
 
 def new_compat_Stow(**opts):
     """Create a new Stow instance with compat mode enabled."""
-    opts['compat'] = 1
+    opts["compat"] = 1
     return new_Stow(**opts)
 
 
@@ -152,10 +224,14 @@ def make_link(link_src, link_dest, invalid=False):
 
     if os.path.exists(abs_source):
         if invalid:
-            raise RuntimeError("Won't make invalid link pointing to existing %s" % abs_target)
+            raise RuntimeError(
+                "Won't make invalid link pointing to existing %s" % abs_target
+            )
     else:
         if not invalid:
-            raise RuntimeError("Won't make link pointing to non-existent %s" % abs_source)
+            raise RuntimeError(
+                "Won't make link pointing to non-existent %s" % abs_source
+            )
 
     os.symlink(link_dest, link_src)
 
@@ -181,14 +257,14 @@ def make_file(path, contents=None):
     if parent_dir and not os.path.exists(parent_dir):
         os.makedirs(parent_dir)
 
-    with open(path, 'w') as f:
+    with open(path, "w") as f:
         if contents is not None:
             f.write(contents)
 
 
 def setup_global_ignore(contents):
     """Set up global ignore file with given contents."""
-    global_ignore_file = join_paths(os.environ['HOME'], stow_module.GLOBAL_IGNORE_FILE)
+    global_ignore_file = join_paths(os.environ["HOME"], stow_module.GLOBAL_IGNORE_FILE)
     make_file(global_ignore_file, contents)
     return global_ignore_file
 
@@ -223,15 +299,16 @@ def remove_dir(dir_path):
         raise RuntimeError("%s is not a directory" % dir_path)
 
     for node in os.listdir(dir_path):
-        if node in ('.', '..'):
+        if node in (".", ".."):
             continue
 
         path = os.path.join(dir_path, node)
 
         if os.path.islink(path):
             os.unlink(path)
-        elif (os.path.isfile(path)
-              and (os.path.getsize(path) == 0 or node == stow_module.LOCAL_IGNORE_FILE)):
+        elif os.path.isfile(path) and (
+            os.path.getsize(path) == 0 or node == stow_module.LOCAL_IGNORE_FILE
+        ):
             os.unlink(path)
         elif os.path.isdir(path):
             remove_dir(path)
@@ -251,7 +328,7 @@ def cd(dir_path):
 
 def cat_file(file_path):
     """Return file contents."""
-    with open(file_path, 'r') as f:
+    with open(file_path, "r") as f:
         return f.read()
 
 
