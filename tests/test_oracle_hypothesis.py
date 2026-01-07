@@ -30,12 +30,13 @@ def try_create_packages(env, packages):
 # =============================================================================
 
 # Strategy for package names
-# Exclude: empty, null, slash, and names starting with - or + (confused with CLI options)
-# See docs/perl-differences.md for details on option parsing differences
+# Exclude:
+#   - null, slash: invalid in filenames
+# Note: We now match Perl's handling of -, +, and empty package names
 name_st = st.text(
-    min_size=1,
+    min_size=0,
     max_size=12,
-).filter(lambda x: "\0" not in x and "/" not in x and not x.startswith("-") and not x.startswith("+"))
+).filter(lambda x: "\0" not in x and "/" not in x)
 
 # Strategy for file content
 content_st = st.text(max_size=100)
@@ -44,8 +45,7 @@ content_st = st.text(max_size=100)
 # Exclude:
 #   - null, slash: invalid in filenames
 #   - "." and "..": special directory entries
-#   - names ending with ~: ignored by default patterns, and Perl has a bug
-#     where ignore check fails for paths containing newlines (see docs/perl-differences.md)
+# Note: We now match Perl's handling of names ending with ~ (default ignore pattern)
 path_component_st = st.text(
     min_size=1,
     max_size=8,
@@ -53,7 +53,6 @@ path_component_st = st.text(
     lambda x: "\0" not in x
     and "/" not in x
     and x not in (".", "..")
-    and not x.endswith("~")
 )
 
 
