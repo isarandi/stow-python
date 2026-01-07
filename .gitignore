@@ -21,3 +21,4 @@ venv/
 # IDE
 .idea/
 .vscode/
+bin/
