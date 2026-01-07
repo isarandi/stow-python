@@ -40,9 +40,20 @@ from stow_python.util import (
     adjust_dotfile,
     unadjust_dotfile,
     require_directory,
-    within_dir,
     move,
 )
+
+
+def _chdir(path: str, name: str = "directory", restore: bool = False) -> None:
+    """Change directory without automatic cleanup (matches Perl's chdir behavior)."""
+    try:
+        os.chdir(path)
+    except OSError as e:
+        raise StowError(f"Cannot chdir to {name}: {path} ({e})") from e
+    if restore:
+        debug(3, 0, f"cwd restored to {path}")
+    else:
+        debug(3, 0, f"cwd now {path}")
 
 LOCAL_IGNORE_FILE = ".stow-local-ignore"
 GLOBAL_IGNORE_FILE = ".stow-global-ignore"
@@ -210,16 +221,19 @@ class _Stower:
                 raise StowError("Package name cannot be empty")
 
         debug(2, 0, f"Planning stow of: {' '.join(packages)} ...")
-        with within_dir(self.c.target, "target tree"):
-            for package in packages:
-                pkg_path = join_paths(self.stow_path, package)
-                require_directory(
-                    pkg_path,
-                    f"The stow directory {self.stow_path} does not contain package {package}",
-                )
-                debug(2, 0, f"Planning stow of package {package}...")
-                self.stow_contents(self.stow_path, package, ".", ".")
-                debug(2, 0, f"Planning stow of package {package}... done")
+        # Use explicit chdir without automatic cleanup to match Perl's die behavior
+        cwd = os.getcwd()
+        _chdir(self.c.target, "target tree")
+        for package in packages:
+            pkg_path = join_paths(self.stow_path, package)
+            require_directory(
+                pkg_path,
+                f"The stow directory {self.stow_path} does not contain package {package}",
+            )
+            debug(2, 0, f"Planning stow of package {package}...")
+            self.stow_contents(self.stow_path, package, ".", ".")
+            debug(2, 0, f"Planning stow of package {package}... done")
+        _chdir(cwd, "previous directory", restore=True)
 
     def plan_unstow(self, packages: Sequence[str]) -> None:
         """Plan unstow operations for the given packages."""
@@ -231,16 +245,19 @@ class _Stower:
                 raise StowError("Package name cannot be empty")
 
         debug(2, 0, f"Planning unstow of: {' '.join(packages)} ...")
-        with within_dir(self.c.target, "target tree"):
-            for package in packages:
-                pkg_path = join_paths(self.stow_path, package)
-                require_directory(
-                    pkg_path,
-                    f"The stow directory {self.stow_path} does not contain package {package}",
-                )
-                debug(2, 0, f"Planning unstow of package {package}...")
-                self.unstow_contents(package, ".", ".")
-                debug(2, 0, f"Planning unstow of package {package}... done")
+        # Use explicit chdir without automatic cleanup to match Perl's die behavior
+        cwd = os.getcwd()
+        _chdir(self.c.target, "target tree")
+        for package in packages:
+            pkg_path = join_paths(self.stow_path, package)
+            require_directory(
+                pkg_path,
+                f"The stow directory {self.stow_path} does not contain package {package}",
+            )
+            debug(2, 0, f"Planning unstow of package {package}...")
+            self.unstow_contents(package, ".", ".")
+            debug(2, 0, f"Planning unstow of package {package}... done")
+        _chdir(cwd, "previous directory", restore=True)
 
     def execute(self) -> StowResult:
         """Execute planned tasks and return result.
@@ -279,9 +296,12 @@ class _Stower:
         if not self.tasks:
             return
 
-        with within_dir(self.c.target, "target tree"):
-            for task in self.tasks:
-                self._process_task(task)
+        # Use explicit chdir without automatic cleanup to match Perl's die behavior
+        cwd = os.getcwd()
+        _chdir(self.c.target, "target tree")
+        for task in self.tasks:
+            self._process_task(task)
+        _chdir(cwd, "previous directory", restore=True)
 
         debug(2, 0, "Processing tasks... done")
 
