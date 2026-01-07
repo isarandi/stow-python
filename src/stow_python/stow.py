@@ -12,9 +12,11 @@ as well as the internal _Stower class that handles planning and execution.
 from __future__ import annotations
 
 import dataclasses
+import errno
 import functools
 import os
 import re
+import stat
 import sys
 from typing import Iterable, Optional, Sequence
 
@@ -847,6 +849,11 @@ class _Stower:
 
             case (TaskAction.REMOVE, TaskType.LINK):
                 try:
+                    # lstat before unlink, matching Perl's built-in unlink behavior
+                    # (Perl checks if target is a directory to protect root on ancient systems)
+                    st = os.lstat(task.path)
+                    if stat.S_ISDIR(st.st_mode):
+                        raise OSError(errno.EISDIR, "Is a directory", task.path)
                     os.unlink(task.path)
                 except OSError as e:
                     raise StowError(f"Could not remove link: {task.path} ({e})") from e
