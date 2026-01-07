@@ -821,76 +821,23 @@ def format_fs_ops(ops, limit=50):
     return '\n'.join(lines)
 
 
-def filter_perl_lstat_before_unlink(perl_ops):
-    """Remove Perl's extra lstat syscalls that precede unlink.
+def find_syscall_diffs(perl_ops, python_ops):
+    """Find syscall differences between Perl and Python.
 
-    Documented difference #8: Perl's unlink does an lstat first to check
-    if the target is a directory (safety check for root). Python's os.unlink
-    does not. This is a Perl runtime behavior, not stow code.
-
-    We filter these out before comparison so the syscall sequences align.
-    """
-    filtered = []
-    i = 0
-    while i < len(perl_ops):
-        op = perl_ops[i]
-        # Check if this is lstat followed by unlink on the same path
-        if (op['syscall'] == 'lstat' and
-            i + 1 < len(perl_ops) and
-            perl_ops[i + 1]['syscall'] == 'unlink' and
-            op['paths'] == perl_ops[i + 1]['paths']):
-            # Skip this lstat, it's Perl's safety check before unlink
-            i += 1
-            continue
-        filtered.append(op)
-        i += 1
-    return filtered
-
-
-def is_expected_syscall_diff(perl_op, python_op):
-    """Check if a syscall difference is documented/expected.
-
-    Returns True if the difference is a known documented difference
-    that we intentionally allow (see docs/perl-differences.md).
-    """
-    if perl_op is None or python_op is None:
-        return False
-
-    # Must be same path(s) and same result
-    if perl_op['paths'] != python_op['paths']:
-        return False
-    if perl_op['result'] != python_op['result']:
-        return False
-
-    path = perl_op['paths'][0] if perl_op['paths'] else ''
-
-    # Documented difference #7: RC file checking
-    # Perl uses stat (via -r test), Python uses open directly
-    if path.endswith('.stowrc'):
-        if perl_op['syscall'] == 'stat' and python_op['syscall'] == 'open':
-            return True
-
-    return False
-
-
-def find_unexpected_syscall_diffs(perl_ops, python_ops):
-    """Find syscall differences that are NOT documented/expected.
-
-    Returns a string describing unexpected differences, or empty string if all OK.
+    Returns a string describing differences, or empty string if all match.
     """
     if len(perl_ops) != len(python_ops):
         return f"Operation count mismatch: Perl {len(perl_ops)} vs Python {len(python_ops)}"
 
-    unexpected = []
+    diffs = []
     for i, (perl_op, python_op) in enumerate(zip(perl_ops, python_ops)):
         if perl_op != python_op:
-            if not is_expected_syscall_diff(perl_op, python_op):
-                unexpected.append(
-                    f"  {i+1}. Perl: {perl_op['syscall']}({', '.join(perl_op['paths'])}) -> {perl_op['result']}\n"
-                    f"      Python: {python_op['syscall']}({', '.join(python_op['paths'])}) -> {python_op['result']}"
-                )
+            diffs.append(
+                f"  {i+1}. Perl: {perl_op['syscall']}({', '.join(perl_op['paths'])}) -> {perl_op['result']}\n"
+                f"      Python: {python_op['syscall']}({', '.join(python_op['paths'])}) -> {python_op['result']}"
+            )
 
-    return '\n'.join(unexpected)
+    return '\n'.join(diffs)
 
 
 def diff_fs_ops(perl_ops, python_ops):
