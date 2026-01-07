@@ -74,6 +74,21 @@ These are edge cases discovered through property-based testing with Hypothesis.
 
 **Note:** Use `-` for options.
 
+## 6. Empty Package Name Rejected
+
+**Example:** `stow ''` or `stow "" pkg`
+
+| Implementation | Behavior |
+|----------------|----------|
+| Perl | Interprets empty string as "current directory" (`.`), stows the ENTIRE stow directory contents including all packages and the `.stow` marker. Exits with code 0 (success). |
+| Python | Rejects with error: "Package name cannot be empty" |
+
+**Result:** Perl silently creates a broken state; Python fails fast with a clear error.
+
+**Cause:** Perl's handling of empty package name causes it to treat the stow directory itself as a package, creating symlinks for everything inside it—including other packages and internal markers. This is clearly unintended and dangerous behavior.
+
+**Note:** This is a Perl bug that we intentionally do not replicate. Rejecting empty package names is a safety improvement.
+
 ---
 
 ## Testing Implications
@@ -82,5 +97,7 @@ The hypothesis-based oracle tests (`tests/test_oracle_hypothesis.py`) filter out
 
 - Path components cannot be `.` or `..` (invalid filesystem entries)
 - Package names that would be parsed as options are not directly tested
+- Empty package names are filtered out (min_size=1 for package name strategy)
+- Names ending with `~` are filtered (default ignore pattern, Perl bug with newlines)
 
 These filters ensure the oracle tests focus on behavioral equivalence for realistic inputs rather than obscure edge cases where Perl has bugs or undefined behavior.
