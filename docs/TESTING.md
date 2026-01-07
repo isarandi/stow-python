@@ -216,6 +216,20 @@ See `docs/perl-differences.md` for edge cases we intentionally filter:
 □ Concurrent stow operations
 ```
 
+### Signal Handling / Interruption
+
+**Note:** Neither Perl stow nor Python stow has signal handling or rollback.
+Both use a two-phase approach (plan, then execute), but if killed during
+execution, partial filesystem state remains. This is a known limitation
+of both implementations.
+
+```
+□ SIGTERM during planning phase → safe, no changes made
+□ SIGTERM during execution phase → partial state (both Perl and Python)
+□ SIGINT (Ctrl+C) behavior
+□ Verify no corruption of existing symlinks on interrupt
+```
+
 ### Special Characters in Paths
 
 ```
