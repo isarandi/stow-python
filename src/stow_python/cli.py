@@ -99,16 +99,24 @@ def _parse_bundled_options(
 ) -> tuple[str, bool, bool, bool]:
     """Parse bundled short options like -npvS.
 
+    Perl's Getopt::Long iterates byte-by-byte, not character-by-character.
+    We re-encode to bytes to match this behavior for multi-byte characters.
+
     Returns (action, has_any_unknown_options, should_show_help, should_show_version).
     """
     has_any_unknown_options = False
     should_show_help = False
     should_show_version = False
+
+    # Convert to bytes to iterate byte-by-byte like Perl
+    char_bytes = chars.encode('utf-8', errors='surrogateescape')
     i = 0
 
-    while i < len(chars):
-        char = chars[i]
-        rest = chars[i + 1 :]
+    while i < len(char_bytes):
+        byte = char_bytes[i]
+        char = chr(byte) if byte < 128 else char_bytes[i:i+1].decode('latin-1')
+        rest_bytes = char_bytes[i + 1:]
+        rest = rest_bytes.decode('utf-8', errors='surrogateescape')
 
         match char:
             case "n":
@@ -117,7 +125,8 @@ def _parse_bundled_options(
                 options["compat"] = True
             case "v" if (m := re.match(r"\d+", rest)):
                 options["verbose"] = int(m.group())
-                i += len(m.group())
+                # Skip bytes for matched digits
+                i += len(m.group().encode('utf-8'))
             case "v":
                 options["verbose"] = options.get("verbose", 0) + 1
             case "S":
@@ -132,13 +141,15 @@ def _parse_bundled_options(
                 should_show_version = True
             case "d" | "t" if rest:
                 options["dir" if char == "d" else "target"] = rest
-                i += len(rest)
+                i += len(rest_bytes)  # Skip remaining bytes
             case "d" | "t":
                 show_usage_and_exit(f"Option {char} requires an argument")
             case _:
-                print(f"Unknown option: {char}", file=sys.stderr)
-                # Perl stops after first unknown option in a bundle
-                return action, True, should_show_help, should_show_version
+                # Output raw byte like Perl does
+                sys.stderr.buffer.write(b"Unknown option: " + bytes([byte]) + b"\n")
+                sys.stderr.buffer.flush()
+                has_any_unknown_options = True
+                # Perl continues processing all bytes, printing each unknown
         i += 1
 
     return action, has_any_unknown_options, should_show_help, should_show_version
@@ -258,10 +269,42 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
         elif arg in ("-V", "--version"):
             show_version_and_exit()
 
-        # Support +n for simulate (backwards compat with Perl's Getopt::Long)
-        elif arg == "+n":
-            print("Warning: +n is deprecated, use -n instead", file=sys.stderr)
-            options["simulate"] = True
+        # Support + prefix (Perl's Getopt::Long getopt_compat mode)
+        # With +, bundling does NOT apply - treat as long option attempt
+        elif arg == "+":
+            # Bare + with nothing after it
+            show_usage_and_exit("Missing option after +")
+        elif arg.startswith("+") and len(arg) > 1:
+            opt = arg[1:]
+            # Map known long options
+            if opt in ("verbose", "v"):
+                options["verbose"] = options.get("verbose", 0) + 1
+            elif opt in ("n", "no", "simulate"):
+                options["simulate"] = True
+            elif opt in ("p", "compat"):
+                options["compat"] = True
+            elif opt == "adopt":
+                options["adopt"] = True
+            elif opt == "no-folding":
+                options["no-folding"] = True
+            elif opt == "dotfiles":
+                options["dotfiles"] = True
+            elif opt in ("D", "delete"):
+                action = "unstow"
+            elif opt in ("S", "stow"):
+                action = "stow"
+            elif opt in ("R", "restow"):
+                action = "restow"
+            elif opt in ("h", "help"):
+                show_usage_and_exit()
+            elif opt in ("V", "version"):
+                show_version_and_exit()
+            else:
+                # Unknown + option: report first BYTE only (Perl behavior)
+                first_byte = opt.encode('utf-8', errors='surrogateescape')[0:1]
+                sys.stderr.buffer.write(b"Unknown option: " + first_byte + b"\n")
+                sys.stderr.buffer.flush()
+                show_usage_and_exit(exit_code=1)
 
         # Package argument (including "-" which is a valid package name)
         elif not arg.startswith("-") or arg == "-":
@@ -275,8 +318,10 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
                     pkgs_to_stow.append(arg)
 
         elif arg.startswith("--"):
-            # Unknown long option
+            # Unknown long option - split at = first like Getopt::Long
             opt_name = arg[2:]
+            if "=" in opt_name:
+                opt_name = opt_name.split("=", 1)[0]
             show_usage_and_exit(f"Unknown option: {opt_name}")
 
         else:
