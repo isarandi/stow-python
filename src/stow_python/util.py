@@ -202,3 +202,58 @@ def unadjust_dotfile(target_node: str) -> str:
         return "dot-" + target_node[1:]
 
     return target_node
+
+
+def move(src: str, dst: str) -> None:
+    """
+    Move a file from src to dst, with NFS robustness.
+
+    Matches Perl's File::Copy::move behavior for robustness on NFS:
+    When rename() fails on NFS due to a lost server ACK, the rename
+    may have actually succeeded. We detect this by pre-stat'ing the
+    source and checking if post-failure the source is gone and the
+    destination has the expected size.
+
+    Falls back to copy+delete for cross-filesystem moves.
+    """
+    import shutil
+
+    # Handle moving into a directory (like Perl's File::Copy::move)
+    # This also produces the same stat syscall as Perl's -d check
+    if os.path.isdir(dst) and not os.path.isdir(src):
+        dst = os.path.join(dst, os.path.basename(src))
+
+    # Pre-stat for NFS robustness (like Perl's File::Copy::move)
+    try:
+        dst_stat = os.stat(dst)
+    except OSError:
+        dst_stat = None
+
+    try:
+        src_size = os.stat(src).st_size
+    except OSError:
+        src_size = None
+
+    # Try rename first (same-filesystem move)
+    try:
+        os.rename(src, dst)
+        return
+    except OSError:
+        pass
+
+    # NFS workaround: check if rename succeeded despite error
+    # This happens when the NFS server ACK is lost but the rename completed
+    if src_size is not None:
+        src_exists = os.path.exists(src)
+        if not src_exists:
+            try:
+                new_dst_stat = os.stat(dst)
+                if new_dst_stat.st_size == src_size:
+                    # Rename actually succeeded
+                    return
+            except OSError:
+                pass
+
+    # Fall back to copy+delete for cross-filesystem moves
+    shutil.copy2(src, dst)
+    os.unlink(src)
