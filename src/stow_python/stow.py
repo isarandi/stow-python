@@ -904,10 +904,10 @@ class _Stower:
         """Get ignore regexps for the given package directory."""
         local_stow_ignore = join_paths(dir_path, LOCAL_IGNORE_FILE)
         home = os.environ.get("HOME", "")
-        global_stow_ignore = join_paths(home, GLOBAL_IGNORE_FILE) if home else ""
+        global_stow_ignore = join_paths(home, GLOBAL_IGNORE_FILE)
 
         for file_path in (local_stow_ignore, global_stow_ignore):
-            if file_path and os.path.exists(file_path):
+            if os.path.exists(file_path):
                 debug(5, 1, f"Using ignore file: {file_path}")
                 return _read_ignore_file(file_path)
             else:
@@ -1159,7 +1159,7 @@ class _Stower:
         if self._is_parent_link_scheduled_for_removal(target_path):
             return False
 
-        if os.path.exists(target_path) or os.path.islink(target_path):
+        if os.path.exists(target_path):
             debug(4, 3, f"| is_a_node({target_path}): really exists")
             return True
 

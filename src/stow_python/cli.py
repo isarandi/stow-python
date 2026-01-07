@@ -337,17 +337,18 @@ def get_config_file_options() -> tuple[dict, list[str], list[str]]:
         stowrc_candidate_paths.insert(0, os.path.join(home, ".stowrc"))
 
     for file_path in stowrc_candidate_paths:
-        if os.path.isfile(file_path) and os.access(file_path, os.R_OK):
-            try:
-                with open(file_path, "r") as f:
-                    for line in f:
-                        line = line.rstrip("\n\r")
-                        try:
-                            defaults.extend(shlex.split(line))
-                        except ValueError:
-                            defaults.extend(line.split())
-            except IOError:
-                raise StowCLIError(f"Could not open {file_path} for reading")
+        try:
+            with open(file_path, "r") as f:
+                for line in f:
+                    line = line.rstrip("\n\r")
+                    try:
+                        defaults.extend(shlex.split(line))
+                    except ValueError:
+                        defaults.extend(line.split())
+        except (FileNotFoundError, PermissionError):
+            continue  # Skip missing or unreadable files
+        except IsADirectoryError:
+            raise StowCLIError(f"Could not open {file_path} for reading")
 
     rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow = parse_cli_options(defaults)
 
