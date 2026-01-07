@@ -12,7 +12,7 @@ import tempfile
 
 from hypothesis import given, settings, assume, strategies as st
 
-from conftest import StowTestEnv, assert_stow_match, assert_chkstow_match
+from conftest import StowTestEnv, assert_stow_match, assert_stow_match_with_fs_ops, assert_chkstow_match
 
 
 def try_create_packages(env, packages):
@@ -262,29 +262,31 @@ class TestStowHypothesis:
     @settings(max_examples=50)
     @given(packages=package_set_st(max_packages=3))
     def test_stow_random_packages(self, packages):
-        """Stow random package structures."""
+        """Stow random package structures with strace comparison."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = StowTestEnv(tmpdir)
             assume(try_create_packages(env, packages))
 
             pkg_names = list(packages.keys())
-            assert_stow_match(env, ["-t", env.target_dir] + pkg_names)
+            assert_stow_match_with_fs_ops(env, ["-t", env.target_dir] + pkg_names)
 
     @settings(max_examples=50)
     @given(packages=package_set_st(max_packages=3))
     def test_unstow_random_packages(self, packages):
-        """Unstow random package structures."""
+        """Unstow random package structures with strace comparison."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = StowTestEnv(tmpdir)
             assume(try_create_packages(env, packages))
 
             pkg_names = list(packages.keys())
 
-            # First stow
-            env.run_perl_stow(["-t", env.target_dir] + pkg_names)
+            def setup():
+                env.run_perl_stow(["-t", env.target_dir] + pkg_names)
 
-            # Then test unstow
-            assert_stow_match(env, ["-t", env.target_dir, "-D"] + pkg_names)
+            # Test unstow with strace comparison
+            assert_stow_match_with_fs_ops(
+                env, ["-t", env.target_dir, "-D"] + pkg_names, setup
+            )
 
     @settings(max_examples=50)
     @given(packages=package_set_st(max_packages=3))
@@ -387,18 +389,22 @@ class TestStowConflictsHypothesis:
         conflict_idx=st.integers(min_value=0, max_value=4),
     )
     def test_adopt_existing_file_random(self, pkg_files, conflict_idx):
-        """Adopt existing files into the package."""
+        """Adopt existing files into the package with strace comparison."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = StowTestEnv(tmpdir)
             env.create_package("pkg", pkg_files)
 
             # Create a conflicting file at one of the package paths
             paths = list(pkg_files.keys())
-            if paths:
-                conflict_path = paths[conflict_idx % len(paths)]
-                env.create_target_file(conflict_path, "to be adopted")
 
-            assert_stow_match(env, ["-t", env.target_dir, "--adopt", "pkg"])
+            def setup():
+                if paths:
+                    conflict_path = paths[conflict_idx % len(paths)]
+                    env.create_target_file(conflict_path, "to be adopted")
+
+            assert_stow_match_with_fs_ops(
+                env, ["-t", env.target_dir, "--adopt", "pkg"], setup
+            )
 
 
 class TestStowVerboseHypothesis:

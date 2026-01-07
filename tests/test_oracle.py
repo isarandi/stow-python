@@ -9,7 +9,7 @@ from __future__ import print_function
 
 import os
 
-from conftest import assert_stow_match
+from conftest import assert_stow_match, assert_stow_match_with_fs_ops
 
 
 class TestBasicStow:
@@ -25,7 +25,7 @@ class TestBasicStow:
             },
         )
 
-        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "mypkg"])
+        assert_stow_match_with_fs_ops(stow_env, ["-t", stow_env.target_dir, "mypkg"])
 
     def test_stow_empty_package(self, stow_env):
         """Stow an empty package."""
@@ -87,11 +87,12 @@ class TestUnstow:
             },
         )
 
-        # First stow it
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "mypkg"])
+        def setup():
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "mypkg"])
 
-        # Then test unstow
-        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "-D", "mypkg"])
+        assert_stow_match_with_fs_ops(
+            stow_env, ["-t", stow_env.target_dir, "-D", "mypkg"], setup
+        )
 
     def test_unstow_not_stowed(self, stow_env):
         """Unstow a package that was never stowed."""
@@ -185,9 +186,13 @@ class TestAdopt:
                 "bin/hello": "from package",
             },
         )
-        stow_env.create_target_file("bin/hello", "existing content")
 
-        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "--adopt", "mypkg"])
+        def setup():
+            stow_env.create_target_file("bin/hello", "existing content")
+
+        assert_stow_match_with_fs_ops(
+            stow_env, ["-t", stow_env.target_dir, "--adopt", "mypkg"], setup
+        )
 
 
 class TestDotfiles:
@@ -397,11 +402,14 @@ class TestTreeFolding:
             },
         )
 
-        # Stow first - should create symlink to share
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1"])
+        def setup():
+            # Stow first - should create symlink to share
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1"])
 
         # Stow second - should unfold and create individual links
-        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "pkg2"])
+        assert_stow_match_with_fs_ops(
+            stow_env, ["-t", stow_env.target_dir, "pkg2"], setup
+        )
 
     def test_no_folding(self, stow_env):
         """--no-folding should create individual links."""
