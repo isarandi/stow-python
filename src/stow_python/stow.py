@@ -11,13 +11,12 @@ as well as the internal _Stower class that handles planning and execution.
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import os
 import re
-import shutil
 import sys
 from typing import Iterable, Optional, Sequence
-import dataclasses
 
 from stow_python.types import (
     Task,
@@ -42,6 +41,7 @@ from stow_python.util import (
     unadjust_dotfile,
     require_directory,
     within_dir,
+    move,
 )
 
 LOCAL_IGNORE_FILE = ".stow-local-ignore"
@@ -841,7 +841,7 @@ class _Stower:
 
             case (TaskAction.MOVE, TaskType.FILE):
                 try:
-                    shutil.move(task.path, task.dest)
+                    move(task.path, task.dest)
                 except (IOError, OSError) as e:
                     raise StowError(
                         f"Could not move {task.path} -> {task.dest} ({e})"
