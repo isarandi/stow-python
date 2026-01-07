@@ -216,10 +216,6 @@ class _Stower:
         if not packages:
             return
 
-        for package in packages:
-            if not package:
-                raise StowError("Package name cannot be empty")
-
         debug(2, 0, f"Planning stow of: {' '.join(packages)} ...")
         # Use explicit chdir without automatic cleanup to match Perl's die behavior
         cwd = os.getcwd()
@@ -239,10 +235,6 @@ class _Stower:
         """Plan unstow operations for the given packages."""
         if not packages:
             return
-
-        for package in packages:
-            if not package:
-                raise StowError("Package name cannot be empty")
 
         debug(2, 0, f"Planning unstow of: {' '.join(packages)} ...")
         # Use explicit chdir without automatic cleanup to match Perl's die behavior
