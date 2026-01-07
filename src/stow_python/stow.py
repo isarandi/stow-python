@@ -911,7 +911,10 @@ class _Stower:
             debug(4, 1, f"Ignoring path /{target}")
             return True
 
-        basename = target.rpartition("/")[2]
+        # Match Perl's buggy basename extraction: s|.+/|| doesn't work with newlines
+        # because . doesn't match \n. This causes ignore patterns to fail for paths
+        # containing newlines. (Perl bug replicated for frivolous compatibility)
+        basename = re.sub(r".+/", "", target)
         if patterns.local_regexp is not None and patterns.local_regexp.search(basename):
             debug(4, 1, f"Ignoring path segment {basename}")
             return True
