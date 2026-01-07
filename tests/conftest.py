@@ -69,6 +69,8 @@ class StowTestEnv:
         self.target_dir = os.path.join(self.tmpdir, "target")
         os.makedirs(self.stow_dir)
         os.makedirs(self.target_dir)
+        # Isolate from user's ~/.stow-global-ignore
+        os.environ["HOME"] = self.tmpdir
 
     def create_package(self, name, files):
         """
@@ -630,6 +632,9 @@ def run_both_tests(env, args, setup_func, check_func=None, check_on_simulate=Fal
 
 def is_stow_relevant_path(path):
     """Check if path is relevant to stow operations (not interpreter/system loading)."""
+    # Filter out Python interpreter paths (site-packages, pycache, etc.)
+    if '.local/lib/python' in path or '__pycache__' in path:
+        return False
     # Relative paths are stow operations (../stow/pkg, bin1, etc.)
     if not path.startswith('/'):
         return True
