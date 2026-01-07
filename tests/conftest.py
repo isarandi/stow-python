@@ -119,10 +119,10 @@ class StowTestEnv:
         """
         Get a snapshot of the target directory state.
 
-        Returns a dict mapping paths to:
-        - 'dir' for directories
-        - 'file:<content>' for files
-        - 'link:<dest>' for symlinks
+        Returns a dict mapping paths to tuples:
+        - ('dir', mode, uid, gid) for directories
+        - ('file', content, mode, uid, gid) for files
+        - ('link', target) for symlinks (perms not checked, usually 0o777)
         """
         state = {}
         for root, dirs, files in os.walk(self.target_dir, followlinks=False):
@@ -133,19 +133,21 @@ class StowTestEnv:
             for d in sorted(dirs):
                 path = os.path.join(rel_root, d) if rel_root else d
                 full_path = os.path.join(root, d)
+                st = os.lstat(full_path)
                 if os.path.islink(full_path):
-                    state[path] = "link:" + os.readlink(full_path)
+                    state[path] = ("link", os.readlink(full_path))
                 else:
-                    state[path] = "dir"
+                    state[path] = ("dir", st.st_mode, st.st_uid, st.st_gid)
 
             for f in sorted(files):
                 path = os.path.join(rel_root, f) if rel_root else f
                 full_path = os.path.join(root, f)
+                st = os.lstat(full_path)
                 if os.path.islink(full_path):
-                    state[path] = "link:" + os.readlink(full_path)
+                    state[path] = ("link", os.readlink(full_path))
                 else:
                     with open(full_path, "r") as fh:
-                        state[path] = "file:" + fh.read()
+                        state[path] = ("file", fh.read(), st.st_mode, st.st_uid, st.st_gid)
 
         return state
 

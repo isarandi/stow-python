@@ -30,10 +30,10 @@ def try_create_packages(env, packages):
 # =============================================================================
 
 # Strategy for package names
-# Exclude: null, slash, and names starting with - or + (confused with CLI options)
+# Exclude: empty, null, slash, and names starting with - or + (confused with CLI options)
 # See docs/perl-differences.md for details on option parsing differences
 name_st = st.text(
-    min_size=0,
+    min_size=1,
     max_size=12,
 ).filter(lambda x: "\0" not in x and "/" not in x and not x.startswith("-") and not x.startswith("+"))
 
