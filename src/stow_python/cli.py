@@ -15,6 +15,7 @@ import os
 import pwd
 import re
 import shlex
+import stat
 import sys
 import traceback
 from typing import Sequence
@@ -369,6 +370,32 @@ def check_packages(pkgs_to_stow: Sequence[str], pkgs_to_unstow: Sequence[str]) -
             raise StowError("Slashes are not permitted in package names")
 
 
+def _is_readable_by_effective_uid(st: os.stat_result) -> bool:
+    """Check if a file is readable by the effective UID, like Perl's -r test.
+
+    This mirrors Perl's -r operator which checks readability based on
+    the stat structure's mode bits and the effective UID/GID.
+    """
+    mode = st.st_mode
+    euid = os.geteuid()
+    egid = os.getegid()
+
+    # Root can read anything
+    if euid == 0:
+        return True
+
+    # Check owner permission
+    if st.st_uid == euid:
+        return bool(mode & stat.S_IRUSR)
+
+    # Check group permission
+    if st.st_gid == egid or st.st_gid in os.getgroups():
+        return bool(mode & stat.S_IRGRP)
+
+    # Check other permission
+    return bool(mode & stat.S_IROTH)
+
+
 def get_config_file_options() -> tuple[dict, list[str], list[str]]:
     """Search for default settings in any .stowrc files.
 
@@ -382,6 +409,16 @@ def get_config_file_options() -> tuple[dict, list[str], list[str]]:
         stowrc_candidate_paths.insert(0, os.path.join(home, ".stowrc"))
 
     for file_path in stowrc_candidate_paths:
+        # Check readability like Perl's -r test: stat and check mode bits
+        try:
+            st = os.stat(file_path)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            raise StowCLIError(f"Could not open {file_path} for reading")
+        if not _is_readable_by_effective_uid(st):
+            continue
+        # File exists and is readable, now open it
         try:
             with open(file_path, "r") as f:
                 for line in f:
@@ -390,9 +427,7 @@ def get_config_file_options() -> tuple[dict, list[str], list[str]]:
                         defaults.extend(shlex.split(line))
                     except ValueError:
                         defaults.extend(line.split())
-        except (FileNotFoundError, PermissionError):
-            continue  # Skip missing or unreadable files
-        except IsADirectoryError:
+        except IOError:
             raise StowCLIError(f"Could not open {file_path} for reading")
 
     rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow = parse_cli_options(defaults)
