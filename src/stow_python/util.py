@@ -56,6 +56,24 @@ _handler.addFilter(_verbosity_filter)
 _logger.addHandler(_handler)
 
 
+def _warn_if_newline(path: str, syscall: str) -> None:
+    """Print Perl-style warning if path contains newline."""
+    if "\n" in path:
+        print(f"Unsuccessful {syscall} on filename containing newline", file=sys.stderr)
+
+
+def lstat_with_newline_warning(path: str) -> os.stat_result:
+    """lstat with Perl-style warning for paths containing newlines."""
+    _warn_if_newline(path, "lstat")
+    return os.lstat(path)
+
+
+def stat_with_newline_warning(path: str) -> os.stat_result:
+    """stat with Perl-style warning for paths containing newlines."""
+    _warn_if_newline(path, "stat")
+    return os.stat(path)
+
+
 def require_directory(path: str, msg: str) -> None:
     """Raise StowError if path is not a directory."""
     try:
@@ -69,6 +87,11 @@ def require_directory(path: str, msg: str) -> None:
 def set_debug_level(level: int) -> None:
     """Set verbosity level for debug()."""
     _verbosity_filter.verbosity = level
+
+
+def get_debug_level() -> int:
+    """Get current verbosity level."""
+    return _verbosity_filter.verbosity
 
 
 def debug(level: int, indent: int, msg: str) -> None:
