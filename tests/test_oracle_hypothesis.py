@@ -10,9 +10,13 @@ from __future__ import print_function
 import os
 import tempfile
 
-from hypothesis import given, settings, assume, strategies as st
+from hypothesis import given, settings, assume, strategies as st, HealthCheck
 
 from conftest import StowTestEnv, assert_stow_match, assert_stow_match_with_fs_ops, assert_chkstow_match
+
+# Oracle tests spawn subprocesses (Perl + Python), so disable per-example deadline
+# to avoid flaky failures on slower systems
+ORACLE_SETTINGS = dict(deadline=None, suppress_health_check=[HealthCheck.too_slow])
 
 
 def try_create_packages(env, packages):
@@ -162,7 +166,7 @@ def dotfiles_tree_st(draw, max_files=5):
 class TestChkstowHypothesis:
     """Hypothesis-based tests for chkstow."""
 
-    @settings(max_examples=50)
+    @settings(max_examples=50, **ORACLE_SETTINGS)
     @given(packages=package_set_st(max_packages=4))
     def test_list_packages_random(self, packages):
         """List packages matches for random package structures."""
@@ -175,7 +179,7 @@ class TestChkstowHypothesis:
 
             assert_chkstow_match(env, ["-l", "-t", env.target_dir])
 
-    @settings(max_examples=50)
+    @settings(max_examples=50, **ORACLE_SETTINGS)
     @given(
         num_broken=st.integers(min_value=1, max_value=5),
         num_valid=st.integers(min_value=0, max_value=3),
@@ -201,7 +205,7 @@ class TestChkstowHypothesis:
 
             assert_chkstow_match(env, ["-b", "-t", env.target_dir])
 
-    @settings(max_examples=50)
+    @settings(max_examples=50, **ORACLE_SETTINGS)
     @given(
         num_aliens=st.integers(min_value=1, max_value=5),
         num_symlinks=st.integers(min_value=0, max_value=3),
@@ -223,7 +227,7 @@ class TestChkstowHypothesis:
 
             assert_chkstow_match(env, ["-a", "-t", env.target_dir])
 
-    @settings(max_examples=30)
+    @settings(max_examples=30, **ORACLE_SETTINGS)
     @given(
         packages=package_set_st(max_packages=3),
         has_stow_marker=st.booleans(),
@@ -259,7 +263,7 @@ class TestChkstowHypothesis:
 class TestStowHypothesis:
     """Hypothesis-based tests for stow."""
 
-    @settings(max_examples=50)
+    @settings(max_examples=50, **ORACLE_SETTINGS)
     @given(packages=package_set_st(max_packages=3))
     def test_stow_random_packages(self, packages):
         """Stow random package structures with strace comparison."""
@@ -270,7 +274,7 @@ class TestStowHypothesis:
             pkg_names = list(packages.keys())
             assert_stow_match_with_fs_ops(env, ["-t", env.target_dir] + pkg_names)
 
-    @settings(max_examples=50)
+    @settings(max_examples=50, **ORACLE_SETTINGS)
     @given(packages=package_set_st(max_packages=3))
     def test_unstow_random_packages(self, packages):
         """Unstow random package structures with strace comparison."""
@@ -288,7 +292,7 @@ class TestStowHypothesis:
                 env, ["-t", env.target_dir, "-D"] + pkg_names, setup
             )
 
-    @settings(max_examples=50)
+    @settings(max_examples=50, **ORACLE_SETTINGS)
     @given(packages=package_set_st(max_packages=3))
     def test_restow_random_packages(self, packages):
         """Restow random package structures."""
@@ -304,7 +308,7 @@ class TestStowHypothesis:
             # Then test restow
             assert_stow_match(env, ["-t", env.target_dir, "-R"] + pkg_names)
 
-    @settings(max_examples=30)
+    @settings(max_examples=30, **ORACLE_SETTINGS)
     @given(files=file_tree_st(max_depth=3, max_files=8))
     def test_stow_no_folding_random(self, files):
         """Stow with --no-folding creates individual links."""
@@ -314,7 +318,7 @@ class TestStowHypothesis:
 
             assert_stow_match(env, ["-t", env.target_dir, "--no-folding", "pkg"])
 
-    @settings(max_examples=30)
+    @settings(max_examples=30, **ORACLE_SETTINGS)
     @given(
         pkg1_files=file_tree_st(max_depth=2, max_files=4),
         pkg2_files=file_tree_st(max_depth=2, max_files=4),
@@ -336,7 +340,7 @@ class TestStowHypothesis:
 class TestStowDotfilesHypothesis:
     """Hypothesis-based tests for dotfiles mode."""
 
-    @settings(max_examples=30)
+    @settings(max_examples=30, **ORACLE_SETTINGS)
     @given(files=dotfiles_tree_st(max_files=5))
     def test_dotfiles_stow_random(self, files):
         """Stow with --dotfiles converts dot-X to .X."""
@@ -346,7 +350,7 @@ class TestStowDotfilesHypothesis:
 
             assert_stow_match(env, ["-t", env.target_dir, "--dotfiles", "dotpkg"])
 
-    @settings(max_examples=30)
+    @settings(max_examples=30, **ORACLE_SETTINGS)
     @given(files=dotfiles_tree_st(max_files=5))
     def test_dotfiles_unstow_random(self, files):
         """Unstow with --dotfiles."""
@@ -364,7 +368,7 @@ class TestStowDotfilesHypothesis:
 class TestStowConflictsHypothesis:
     """Hypothesis-based tests for conflict scenarios."""
 
-    @settings(max_examples=30)
+    @settings(max_examples=30, **ORACLE_SETTINGS)
     @given(
         pkg_files=file_tree_st(max_depth=2, max_files=5),
         conflict_idx=st.integers(min_value=0, max_value=4),
@@ -383,7 +387,7 @@ class TestStowConflictsHypothesis:
 
             assert_stow_match(env, ["-t", env.target_dir, "pkg"])
 
-    @settings(max_examples=30)
+    @settings(max_examples=30, **ORACLE_SETTINGS)
     @given(
         pkg_files=file_tree_st(max_depth=2, max_files=5),
         conflict_idx=st.integers(min_value=0, max_value=4),
@@ -410,7 +414,7 @@ class TestStowConflictsHypothesis:
 class TestStowVerboseHypothesis:
     """Hypothesis-based tests for verbose output."""
 
-    @settings(max_examples=20)
+    @settings(max_examples=20, **ORACLE_SETTINGS)
     @given(
         packages=package_set_st(max_packages=2),
         verbose_level=st.integers(min_value=1, max_value=3),
