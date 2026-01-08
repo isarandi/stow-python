@@ -493,11 +493,11 @@ def assert_chkstow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
     )
 
     # Compare filesystem operations
-    unexpected_diffs = find_unexpected_syscall_diffs(perl_ops, python_ops)
-    assert not unexpected_diffs, (
-        f"Unexpected filesystem operation differences!\n"
+    syscall_diffs = find_syscall_diffs(perl_ops, python_ops)
+    assert not syscall_diffs, (
+        f"Filesystem operation differences!\n"
         f"Perl ({len(perl_ops)} ops) vs Python ({len(python_ops)} ops):\n"
-        f"{unexpected_diffs}\n\n"
+        f"{syscall_diffs}\n\n"
         f"Full diff:\n{diff_fs_ops(perl_ops, python_ops)}"
     )
 
@@ -983,17 +983,13 @@ def assert_stow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
         f"Filesystem state mismatch:\nPerl: {perl_state}\nPython: {python_state}"
     )
 
-    # Filter out documented differences before comparison
-    # Difference #8: Perl's unlink does lstat first (safety check)
-    perl_ops_filtered = filter_perl_lstat_before_unlink(perl_ops)
-
-    # Compare filesystem operations, allowing documented differences
-    unexpected_diffs = find_unexpected_syscall_diffs(perl_ops_filtered, python_ops)
-    assert not unexpected_diffs, (
-        f"Unexpected filesystem operation differences!\n"
-        f"Perl ({len(perl_ops_filtered)} ops) vs Python ({len(python_ops)} ops):\n"
-        f"{unexpected_diffs}\n\n"
-        f"Full diff:\n{diff_fs_ops(perl_ops_filtered, python_ops)}"
+    # Compare filesystem operations
+    syscall_diffs = find_syscall_diffs(perl_ops, python_ops)
+    assert not syscall_diffs, (
+        f"Filesystem operation differences!\n"
+        f"Perl ({len(perl_ops)} ops) vs Python ({len(python_ops)} ops):\n"
+        f"{syscall_diffs}\n\n"
+        f"Full diff:\n{diff_fs_ops(perl_ops, python_ops)}"
     )
 
     return perl_rc, perl_stdout, perl_stderr, perl_state, perl_ops, python_ops
