@@ -31,7 +31,7 @@ class StowError(Exception):
         super().__init__(message)
 
 
-class StowProgrammingError(StowError):
+class StowInternalError(StowError):
     """Internal error indicating a bug in stow."""
 
     def __init__(self, message: str):

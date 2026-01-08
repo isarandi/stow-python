@@ -42,7 +42,7 @@ from stow_python.types import (
     StowConfig,
     StowResult,
     StowError,
-    StowProgrammingError,
+    StowInternalError,
     StowConflictError,
     StowCLIError,
 )
@@ -58,7 +58,7 @@ __all__ = [
     "StowConfig",
     "StowResult",
     "StowError",
-    "StowProgrammingError",
+    "StowInternalError",
     "StowConflictError",
     "StowCLIError",
     "__version__",

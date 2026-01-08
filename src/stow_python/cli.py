@@ -21,7 +21,7 @@ import traceback
 from typing import Sequence
 
 from stow_python.stow import _Stower
-from stow_python.types import StowError, StowProgrammingError, StowCLIError, StowConfig
+from stow_python.types import StowError, StowInternalError, StowCLIError, StowConfig
 from stow_python.util import VERSION, PROGRAM_NAME, parent
 
 
@@ -29,7 +29,7 @@ def main() -> None:
     """Main entry point for stow command."""
     try:
         _main()
-    except StowProgrammingError as e:
+    except StowInternalError as e:
         print(
             f"\n{PROGRAM_NAME}: INTERNAL ERROR: {e.message}\n{traceback.format_exc()}",
             file=sys.stderr,
