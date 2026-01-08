@@ -28,7 +28,7 @@ These tests run chkstow CLI on both implementations and verify identical:
 import os
 import pytest
 
-from conftest import assert_chkstow_match
+from conftest import assert_chkstow_match, assert_chkstow_match_with_fs_ops
 
 
 @pytest.fixture
@@ -116,3 +116,19 @@ class TestChkstowBoth:
         bad_link = os.path.join(chkstow_env.target_dir, "bin", "broken")
         os.symlink("../../stow/nonexistent/bin/broken", bad_link)
         assert_chkstow_match(chkstow_env, ["-b", "-t", "."])
+
+
+class TestChkstowSyscalls:
+    """Oracle tests comparing syscall traces between Perl and Python chkstow."""
+
+    def test_list_packages_syscalls(self, chkstow_env):
+        """List packages mode should produce identical syscalls."""
+        assert_chkstow_match_with_fs_ops(chkstow_env, ["-l", "-t", "."])
+
+    def test_badlinks_syscalls(self, chkstow_env):
+        """Bad links check should produce identical syscalls."""
+        assert_chkstow_match_with_fs_ops(chkstow_env, ["-b", "-t", "."])
+
+    def test_aliens_syscalls(self, chkstow_env):
+        """Aliens check should produce identical syscalls."""
+        assert_chkstow_match_with_fs_ops(chkstow_env, ["-a", "-t", "."])
