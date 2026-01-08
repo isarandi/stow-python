@@ -23,56 +23,147 @@ Based on Perl t/dotfiles.t - integration tests only.
 Unit tests for adjust_dotfile/unadjust_dotfile remain in test_dotfiles.py.
 """
 
-from conftest import assert_stow_match_with_fs_ops
+from conftest import run_both_tests, check_link, check_not_exists, check_dir
 
 
 class TestStowDotfilesBoth:
     """Tests for stowing with dotfiles mode - black-box comparison of both implementations."""
 
     def test_stow_dot_foo_as_dotfoo(self, stow_env):
-        """stow dot-foo as .foo"""
+        """stow dot-foo as .foo
+
+        Perl: is(readlink('.foo'), '../stow/dotfiles/dot-foo')
+        """
         stow_env.create_package("dotfiles", {"dot-foo": "foo content"})
 
-        assert_stow_match_with_fs_ops(stow_env, ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, ".foo", "../stow/dotfiles/dot-foo")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
 
     def test_stow_dot_foo_without_dotfiles_enabled(self, stow_env):
-        """stow dot-foo as dot-foo without --dotfiles enabled"""
+        """stow dot-foo as dot-foo without --dotfiles enabled
+
+        Perl: is(readlink('dot-foo'), '../stow/dotfiles/dot-foo')
+        """
         stow_env.create_package("dotfiles", {"dot-foo": "foo content"})
 
-        # Without --dotfiles flag
-        assert_stow_match_with_fs_ops(stow_env, ["-t", stow_env.target_dir, "dotfiles"])
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "dot-foo", "../stow/dotfiles/dot-foo")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
 
     def test_stow_dot_emacs_dir_as_dotemacs(self, stow_env):
-        """stow dot-emacs dir as .emacs"""
+        """stow dot-emacs dir as .emacs
+
+        Perl: is(readlink('.emacs'), '../stow/dotfiles/dot-emacs')
+        """
         stow_env.create_package("dotfiles", {"dot-emacs/init.el": "emacs init"})
 
-        assert_stow_match_with_fs_ops(stow_env, ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, ".emacs", "../stow/dotfiles/dot-emacs")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
 
     def test_stow_dot_dir_when_target_dir_exists(self, stow_env):
-        """stow dir marked with 'dot' prefix when directory exists in target"""
-        stow_env.create_package("dotfiles", {"dot-emacs.d/init.el": "emacs init"})
-        stow_env.create_target_dir(".emacs.d")
+        """stow dir marked with 'dot' prefix when directory exists in target
 
-        assert_stow_match_with_fs_ops(stow_env, ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        Perl: is(readlink('.emacs.d/init.el'), '../../stow/dotfiles/dot-emacs.d/init.el')
+        """
+        stow_env.create_package("dotfiles", {"dot-emacs.d/init.el": "emacs init"})
+
+        def setup():
+            stow_env.create_target_dir(".emacs.d")
+
+        def check(env):
+            check_link(env, ".emacs.d/init.el", "../../stow/dotfiles/dot-emacs.d/init.el")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
 
     def test_stow_dot_dir_when_target_dir_exists_2_levels(self, stow_env):
-        """stow dir marked with 'dot' prefix when directory exists in target (2 levels)"""
+        """stow dir marked with 'dot' prefix when directory exists in target (2 levels)
+
+        Perl: is(readlink('.emacs.d/.emacs.d'), '../../stow/dotfiles/dot-emacs.d/dot-emacs.d')
+        """
         stow_env.create_package(
             "dotfiles", {"dot-emacs.d/dot-emacs.d/init.el": "nested init"}
         )
-        stow_env.create_target_dir(".emacs.d")
 
-        assert_stow_match_with_fs_ops(stow_env, ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        def setup():
+            stow_env.create_target_dir(".emacs.d")
+
+        def check(env):
+            check_link(env, ".emacs.d/.emacs.d", "../../stow/dotfiles/dot-emacs.d/dot-emacs.d")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
 
     def test_stow_dot_dir_nested_2_levels(self, stow_env):
-        """stow dir marked with 'dot' prefix when directory exists in target (nested 2 levels)"""
-        stow_env.create_package("dotfiles", {"dot-one/dot-two/three": "content"})
-        stow_env.create_target_dir(".one/.two")
+        """stow dir marked with 'dot' prefix when directory exists in target (nested 2 levels)
 
-        assert_stow_match_with_fs_ops(stow_env, ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        Perl: is(readlink('./.one/.two/three'), '../../../stow/dotfiles/dot-one/dot-two/three')
+        """
+        stow_env.create_package("dotfiles", {"dot-one/dot-two/three": "content"})
+
+        def setup():
+            stow_env.create_target_dir(".one/.two")
+
+        def check(env):
+            check_link(env, ".one/.two/three", "../../../stow/dotfiles/dot-one/dot-two/three")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
 
     def test_dot_dash_should_not_expand(self, stow_env):
-        """dot-. should not have that part expanded."""
+        """dot-. should not have that part expanded.
+
+        Perl:
+          is(readlink('dot-'), '../stow/dotfiles/dot-')
+          is(readlink('dot-.'), '../stow/dotfiles/dot-.')
+        """
         stow_env.create_package(
             "dotfiles",
             {
@@ -81,65 +172,137 @@ class TestStowDotfilesBoth:
             },
         )
 
-        assert_stow_match_with_fs_ops(stow_env, ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "dot-", "../stow/dotfiles/dot-")
+            check_link(env, "dot-.", "../stow/dotfiles/dot-.")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
 
     def test_stow_dot_gitignore_not_ignored_by_default(self, stow_env):
-        """when stowing, dot-gitignore is not ignored by default"""
+        """when stowing, dot-gitignore is not ignored by default
+
+        Perl: is(readlink('.gitignore'), '../stow/dotfiles/dot-gitignore')
+        """
         stow_env.create_package("dotfiles", {"dot-gitignore": "*.pyc\n"})
 
-        assert_stow_match_with_fs_ops(stow_env, ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, ".gitignore", "../stow/dotfiles/dot-gitignore")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
 
 
 class TestUnstowDotfilesBoth:
     """Tests for unstowing with dotfiles mode - black-box comparison of both implementations."""
 
     def test_unstow_bar_from_dot_bar(self, stow_env):
-        """unstow .bar from dot-bar"""
+        """unstow .bar from dot-bar
+
+        Perl:
+          ok(-f '../stow/dotfiles/dot-bar', 'package file untouched')
+          ok(! -e '.bar' => '.bar was unstowed')
+        """
         stow_env.create_package("dotfiles", {"dot-bar": "bar content"})
 
-        # First stow with Perl (sets up initial state for both runs)
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        def setup():
+            # Pre-create the link as if already stowed
+            stow_env.create_target_link(".bar", "../stow/dotfiles/dot-bar")
 
-        # Then test unstow
-        assert_stow_match_with_fs_ops(
-            stow_env, ["-t", stow_env.target_dir, "--dotfiles", "-D", "dotfiles"]
+        def check(env):
+            check_not_exists(env, ".bar")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "-D", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
         )
 
     def test_unstow_dot_emacs_d_init_el(self, stow_env):
-        """unstow dot-emacs.d/init.el when .emacs.d/init.el in target"""
+        """unstow dot-emacs.d/init.el when .emacs.d/init.el in target
+
+        Perl:
+          ok(! -e '.emacs.d/init.el', '.emacs.d/init.el unstowed')
+          ok(-d '.emacs.d/' => '.emacs.d left behind')
+        """
         stow_env.create_package("dotfiles", {"dot-emacs.d/init.el": "emacs init"})
-        stow_env.create_target_dir(".emacs.d")
 
-        # First stow
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        def setup():
+            stow_env.create_target_dir(".emacs.d")
+            stow_env.create_target_link(".emacs.d/init.el", "../../stow/dotfiles/dot-emacs.d/init.el")
 
-        # Then test unstow
-        assert_stow_match_with_fs_ops(
-            stow_env, ["-t", stow_env.target_dir, "--dotfiles", "-D", "dotfiles"]
+        def check(env):
+            check_not_exists(env, ".emacs.d/init.el")
+            check_dir(env, ".emacs.d")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "-D", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
         )
 
     def test_unstow_dot_emacs_d_init_el_compat_mode(self, stow_env):
-        """unstow dot-emacs.d/init.el in --compat mode"""
+        """unstow dot-emacs.d/init.el in --compat mode
+
+        Perl:
+          ok(! -e '.emacs.d/init.el', '.emacs.d/init.el unstowed')
+          ok(-d '.emacs.d/' => '.emacs.d left behind')
+        """
         stow_env.create_package("dotfiles", {"dot-emacs.d/init.el": "emacs init"})
-        stow_env.create_target_dir(".emacs.d")
 
-        # First stow
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        def setup():
+            stow_env.create_target_dir(".emacs.d")
+            stow_env.create_target_link(".emacs.d/init.el", "../../stow/dotfiles/dot-emacs.d/init.el")
 
-        # Then test unstow with --compat
-        assert_stow_match_with_fs_ops(
+        def check(env):
+            check_not_exists(env, ".emacs.d/init.el")
+            check_dir(env, ".emacs.d")
+
+        run_both_tests(
             stow_env,
             ["-t", stow_env.target_dir, "--dotfiles", "--compat", "-D", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
         )
 
     def test_unstow_dot_gitignore_not_ignored_by_default(self, stow_env):
-        """when unstowing, dot-gitignore is not ignored by default"""
+        """when unstowing, dot-gitignore is not ignored by default
+
+        Perl: ok(! -e ('.gitignore') => "dot-gitignore shouldn't have been ignored")
+        """
         stow_env.create_package("dotfiles", {"dot-gitignore": "*.pyc\n"})
 
-        # First stow
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "--dotfiles", "dotfiles"])
+        def setup():
+            stow_env.create_target_link(".gitignore", "../stow/dotfiles/dot-gitignore")
 
-        # Then test unstow
-        assert_stow_match_with_fs_ops(
-            stow_env, ["-t", stow_env.target_dir, "--dotfiles", "-D", "dotfiles"]
+        def check(env):
+            check_not_exists(env, ".gitignore")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "-D", "dotfiles"],
+            setup,
+            check,
+            compare_fs_ops=True,
         )

@@ -21,7 +21,7 @@ Testing cleanup_invalid_links()
 
 from testutil import (
     count_conflicts,
-    TaskAction,
+    Action,
     new_Stow,
     make_path,
     make_file,
@@ -57,7 +57,7 @@ class TestCleanupInvalidLinks:
 
         assert count_conflicts(stow) == 0, "no conflicts cleaning up bad link"
         assert len(stow.tasks) == 1, "one task cleaning up bad link"
-        assert stow._get_link_task_action("bin2/file2b") == TaskAction.REMOVE, (
+        assert stow._get_link_task_action("bin2/file2b") == Action.REMOVE, (
             "removal task for bad link"
         )
 

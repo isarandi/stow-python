@@ -22,12 +22,30 @@ Utilities shared by test scripts - Python port of testutil.pm
 from __future__ import print_function
 
 import os
+import re
 import shutil
+from typing import Iterable, Optional, Union
 
 # Import from the stow_python package
-from stow_python.stow import _Stower, _compile_patterns, _read_ignore_file
+from stow_python.stow import _Stower, _read_ignore_file
+
+
+def _compile_patterns(
+    patterns: Optional[Iterable[Union[str, re.Pattern]]],
+    prefix: str = "",
+    suffix: str = "",
+) -> list[re.Pattern]:
+    """Compile pattern strings to regex, passing through already-compiled patterns."""
+    if not patterns:
+        return []
+    return [
+        p if isinstance(p, re.Pattern) else re.compile(rf"{prefix}({p}){suffix}")
+        for p in patterns
+    ]
+
+
 from stow_python.stow import LOCAL_IGNORE_FILE, GLOBAL_IGNORE_FILE
-from stow_python.types import StowConfig, TaskAction  # noqa: F401
+from stow_python.types import StowConfig, Action  # noqa: F401
 from stow_python.util import (
     parent,  # noqa: F401 - re-exported for tests
     canon_path,  # noqa: F401 - re-exported for tests

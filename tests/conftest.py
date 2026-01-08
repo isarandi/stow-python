@@ -60,6 +60,31 @@ if not os.path.exists(PERL_STOW):
     PERL_LIB = None
 
 
+# Auto-rebuild bin/ if source files are newer
+BUILD_SCRIPT = os.path.join(EXACT_PYSTOW_DIR, "scripts", "build_single_file.py")
+SRC_DIR = os.path.join(EXACT_PYSTOW_DIR, "src", "stow_python")
+
+
+def _needs_rebuild():
+    """Check if bin/stow needs rebuilding (source newer than binary)."""
+    if not os.path.exists(PYTHON_STOW):
+        return True
+    bin_mtime = os.path.getmtime(PYTHON_STOW)
+    for root, _, files in os.walk(SRC_DIR):
+        for f in files:
+            if f.endswith(".py"):
+                if os.path.getmtime(os.path.join(root, f)) > bin_mtime:
+                    return True
+    return False
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ensure_bin_built():
+    """Auto-rebuild bin/stow and bin/chkstow if source files are newer."""
+    if _needs_rebuild():
+        subprocess.check_call([sys.executable, BUILD_SCRIPT])
+
+
 class StowTestEnv:
     """Test environment for running stow commands."""
 
