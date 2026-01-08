@@ -1,33 +1,86 @@
-name: Publish to PyPI
+name: Release
 
 on:
   release:
-    types: [published]
-
-permissions:
-  contents: read
+    types: [created]
 
 jobs:
-  publish:
-    name: Upload to PyPI
+  test:
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: ${{ matrix.python-version }}
 
-      - name: Install build
+      - name: Install dependencies
+        run: pip install pytest hypothesis mypy ruff
+
+      - name: Type check with mypy
+        run: mypy src/stow_python/ --ignore-missing-imports
+
+      - name: Lint with ruff
+        run: ruff check src/stow_python/
+
+      - name: Check formatting with ruff
+        run: ruff format --check src/stow_python/
+
+      - name: Install Perl stow for oracle tests
+        run: |
+          ./tests/get_gnu_stow_for_testing_identical_behavior.sh
+
+      - name: Run tests
+        run: pytest tests/ -v --ignore=tests/test_oracle_hypothesis.py
+
+  attach-binaries:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build single-file executables
+        run: python scripts/build_single_file.py
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} \
+            bin/stow \
+            bin/chkstow \
+            --clobber
+
+  publish-pypi:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # For trusted publishing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
         run: pip install build
 
-      - name: Build sdist
-        run: python -m build --sdist
+      - name: Build package
+        run: python -m build
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
