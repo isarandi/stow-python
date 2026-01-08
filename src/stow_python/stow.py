@@ -23,7 +23,7 @@ from stow_python.types import (
     TaskAction,
     TaskType,
     StowError,
-    StowProgrammingError,
+    StowInternalError,
     StowedPath,
     PackageSubpath,
     MarkedStowDir,
@@ -660,7 +660,7 @@ class _Stower:
         debug(2, 0, f"Cleaning up any invalid links in {dir_path} (pwd={cwd})")
 
         if not os.path.isdir(dir_path):
-            raise StowProgrammingError(
+            raise StowInternalError(
                 f"cleanup_invalid_links() called with a non-directory: {dir_path}"
             )
 
@@ -848,7 +848,7 @@ class _Stower:
                     ) from e
 
             case _:
-                raise StowProgrammingError(f"bad task action: {task.action.value}")
+                raise StowInternalError(f"bad task action: {task.action.value}")
 
     def _record_conflict(self, package: str, message: str) -> None:
         """Handle conflicts in stow operations."""
@@ -858,7 +858,7 @@ class _Stower:
     def _should_ignore(self, stow_path: str, package: str, target: str) -> bool:
         """Determine if the given path matches a regex in our ignore list."""
         if not target:
-            raise StowProgrammingError("Stow.ignore() called with empty target")
+            raise StowInternalError("Stow.ignore() called with empty target")
 
         for suffix in self._ignore_pats:
             if suffix.search(target):
@@ -1018,7 +1018,7 @@ class _Stower:
             debug(5, 5, f"is {path_so_far} marked stow dir?")
             if self._is_marked_stow_dir(path_so_far):
                 if last_segment == len(segments) - 1:
-                    raise StowProgrammingError(
+                    raise StowInternalError(
                         "find_stowed_path() called directly on stow dir"
                     )
 
@@ -1046,7 +1046,7 @@ class _Stower:
             return None
 
         if action not in (TaskAction.REMOVE, TaskAction.CREATE):
-            raise StowProgrammingError(f"bad task action: {action.value}")
+            raise StowInternalError(f"bad task action: {action.value}")
 
         debug(
             4,
@@ -1136,7 +1136,7 @@ class _Stower:
         # Use pattern matching for the truth table
         match (laction, daction):
             case (TaskAction.REMOVE, TaskAction.REMOVE):
-                raise StowProgrammingError(f"removing link and dir: {target_path}")
+                raise StowInternalError(f"removing link and dir: {target_path}")
             case (TaskAction.REMOVE, TaskAction.CREATE):
                 # Unfolding: link removal happens before dir creation.
                 return True
@@ -1146,7 +1146,7 @@ class _Stower:
                 # Folding: dir removal happens before link creation.
                 return True
             case (TaskAction.CREATE, TaskAction.CREATE):
-                raise StowProgrammingError(f"creating link and dir: {target_path}")
+                raise StowInternalError(f"creating link and dir: {target_path}")
             case (TaskAction.CREATE, _):
                 return True
             case (None, TaskAction.REMOVE):
@@ -1175,7 +1175,7 @@ class _Stower:
             if action == TaskAction.CREATE:
                 return self.link_task_for[link].source
             elif action == TaskAction.REMOVE:
-                raise StowProgrammingError(
+                raise StowInternalError(
                     f"read_a_link() passed a path that is scheduled for removal: {link}"
                 )
 
@@ -1186,7 +1186,7 @@ class _Stower:
             except OSError as e:
                 raise StowError(f"Could not read link: {link} ({e})") from e
 
-        raise StowProgrammingError(f"read_a_link() passed a non-link path: {link}")
+        raise StowInternalError(f"read_a_link() passed a non-link path: {link}")
 
     def _do_link(self, link_dest: str, link_src: str) -> None:
         """Wrap 'link' operation for later processing."""
@@ -1195,20 +1195,20 @@ class _Stower:
 
             if task_ref.action == TaskAction.CREATE:
                 if task_ref.type == TaskType.DIR:
-                    raise StowProgrammingError(
+                    raise StowInternalError(
                         f"new link ({link_src} => {link_dest}) clashes with planned new directory"
                     )
             elif task_ref.action == TaskAction.REMOVE:
                 pass  # May need to remove a directory before creating a link
             else:
-                raise StowProgrammingError(f"bad task action: {task_ref.action.value}")
+                raise StowInternalError(f"bad task action: {task_ref.action.value}")
 
         if link_src in self.link_task_for:
             task_ref = self.link_task_for[link_src]
 
             if task_ref.action == TaskAction.CREATE:
                 if task_ref.source != link_dest:
-                    raise StowProgrammingError(
+                    raise StowInternalError(
                         f"new link clashes with planned new link: {task_ref.path} => {task_ref.source}"
                     )
                 else:
@@ -1230,7 +1230,7 @@ class _Stower:
                     del self.link_task_for[link_src]
                     return
             else:
-                raise StowProgrammingError(f"bad task action: {task_ref.action.value}")
+                raise StowInternalError(f"bad task action: {task_ref.action.value}")
 
         debug(1, 0, f"LINK: {link_src} => {link_dest}")
         task = Task(
@@ -1256,13 +1256,13 @@ class _Stower:
                 del self.link_task_for[file_path]
                 return
             else:
-                raise StowProgrammingError(f"bad task action: {task_ref.action.value}")
+                raise StowInternalError(f"bad task action: {task_ref.action.value}")
 
         if (
             file_path in self.dir_task_for
             and self.dir_task_for[file_path].action == TaskAction.CREATE
         ):
-            raise StowProgrammingError(
+            raise StowInternalError(
                 f"new unlink operation clashes with planned operation: {self.dir_task_for[file_path].action.value} dir {file_path}"
             )
 
@@ -1288,13 +1288,13 @@ class _Stower:
             task_ref = self.link_task_for[dir_path]
 
             if task_ref.action == TaskAction.CREATE:
-                raise StowProgrammingError(
+                raise StowInternalError(
                     f"new dir clashes with planned new link ({task_ref.path} => {task_ref.source})"
                 )
             elif task_ref.action == TaskAction.REMOVE:
                 pass  # May need to remove a link before creating a directory
             else:
-                raise StowProgrammingError(f"bad task action: {task_ref.action.value}")
+                raise StowInternalError(f"bad task action: {task_ref.action.value}")
 
         if dir_path in self.dir_task_for:
             task_ref = self.dir_task_for[dir_path]
@@ -1308,7 +1308,7 @@ class _Stower:
                 del self.dir_task_for[dir_path]
                 return
             else:
-                raise StowProgrammingError(f"bad task action: {task_ref.action.value}")
+                raise StowInternalError(f"bad task action: {task_ref.action.value}")
 
         debug(1, 0, f"MKDIR: {dir_path}")
         task = Task(
@@ -1323,7 +1323,7 @@ class _Stower:
         """Wrap 'rmdir' operation."""
         if dir_path in self.link_task_for:
             task_ref = self.link_task_for[dir_path]
-            raise StowProgrammingError(
+            raise StowInternalError(
                 f"rmdir clashes with planned operation: {task_ref.action.value} link {task_ref.path} => {task_ref.source}"
             )
 
@@ -1339,7 +1339,7 @@ class _Stower:
                 del self.dir_task_for[dir_path]
                 return
             else:
-                raise StowProgrammingError(f"bad task action: {task_ref.action.value}")
+                raise StowInternalError(f"bad task action: {task_ref.action.value}")
 
         debug(1, 0, f"RMDIR {dir_path}")
         task = Task(
@@ -1355,12 +1355,12 @@ class _Stower:
         """Wrap 'move' operation for later processing."""
         if src in self.link_task_for:
             task_ref = self.link_task_for[src]
-            raise StowProgrammingError(
+            raise StowInternalError(
                 f"do_mv: pre-existing link task for {src}; action: {task_ref.action.value}, source: {task_ref.source}"
             )
         elif src in self.dir_task_for:
             task_ref = self.dir_task_for[src]
-            raise StowProgrammingError(
+            raise StowInternalError(
                 f"do_mv: pre-existing dir task for {src}?! action: {task_ref.action.value}"
             )
 

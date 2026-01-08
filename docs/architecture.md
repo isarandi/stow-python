@@ -228,7 +228,7 @@ This allows packages to store dotfiles without the leading dot.
 
 ```
 StowError (base)
-├── StowProgrammingError  # Internal bug
+├── StowInternalError  # Internal bug
 ├── StowConflictError     # Conflicts detected
 └── StowCLIError          # CLI usage error
 ```
