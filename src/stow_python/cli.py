@@ -17,7 +17,7 @@ import re
 import shlex
 import sys
 import traceback
-from typing import Sequence
+from typing import Optional, Sequence
 
 from stow_python.stow import _Stower
 from stow_python.types import StowError, StowInternalError, StowCLIError, StowConfig
@@ -110,35 +110,36 @@ def _parse_bundled_options(
         char = chars[i]
         rest = chars[i + 1 :]
 
-        match char:
-            case "n":
-                options["simulate"] = True
-            case "p":
-                options["compat"] = True
-            case "v" if (m := re.match(r"\d+", rest)):
+        if char == "n":
+            options["simulate"] = True
+        elif char == "p":
+            options["compat"] = True
+        elif char == "v":
+            m = re.match(r"\d+", rest)
+            if m:
                 options["verbose"] = int(m.group())
                 i += len(m.group())
-            case "v":
+            else:
                 options["verbose"] = options.get("verbose", 0) + 1
-            case "S":
-                action = "stow"
-            case "D":
-                action = "unstow"
-            case "R":
-                action = "restow"
-            case "h":
-                should_show_help = True
-            case "V":
-                should_show_version = True
-            case "d" | "t" if rest:
-                options["dir" if char == "d" else "target"] = rest
-                i += len(rest)
-            case "d" | "t":
-                show_usage_and_exit(f"Option {char} requires an argument")
-            case _:
-                print(f"Unknown option: {char}", file=sys.stderr)
-                # Perl stops after first unknown option in a bundle
-                return action, True, should_show_help, should_show_version
+        elif char == "S":
+            action = "stow"
+        elif char == "D":
+            action = "unstow"
+        elif char == "R":
+            action = "restow"
+        elif char == "h":
+            should_show_help = True
+        elif char == "V":
+            should_show_version = True
+        elif char in ("d", "t") and rest:
+            options["dir" if char == "d" else "target"] = rest
+            i += len(rest)
+        elif char in ("d", "t"):
+            show_usage_and_exit(f"Option {char} requires an argument")
+        else:
+            print(f"Unknown option: {char}", file=sys.stderr)
+            # Perl stops after first unknown option in a bundle
+            return action, True, should_show_help, should_show_version
         i += 1
 
     return action, has_any_unknown_options, should_show_help, should_show_version
@@ -163,7 +164,7 @@ def process_options() -> tuple[dict, list[str], list[str]]:
             options[option] = cli_value
 
     sanitize_path_options(options)
-    check_packages(pkgs_to_unstow, pkgs_to_stow)
+    check_packages(pkgs_to_stow, pkgs_to_unstow)
 
     return (options, pkgs_to_unstow, pkgs_to_stow)
 
@@ -265,14 +266,13 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
 
         # Package argument (including "-" which is a valid package name)
         elif not arg.startswith("-") or arg == "-":
-            match action:
-                case "restow":
-                    pkgs_to_unstow.append(arg)
-                    pkgs_to_stow.append(arg)
-                case "unstow":
-                    pkgs_to_unstow.append(arg)
-                case _:
-                    pkgs_to_stow.append(arg)
+            if action == "restow":
+                pkgs_to_unstow.append(arg)
+                pkgs_to_stow.append(arg)
+            elif action == "unstow":
+                pkgs_to_unstow.append(arg)
+            else:
+                pkgs_to_stow.append(arg)
 
         elif arg.startswith("--"):
             # Unknown long option
@@ -303,11 +303,15 @@ def sanitize_path_options(options: dict) -> None:
         options["dir"] = stow_dir_env if stow_dir_env else os.getcwd()
 
     if not os.path.isdir(options["dir"]):
-        show_usage_and_exit(f"{PROGRAM_NAME}: --dir value '{options['dir']}' is not a valid directory\n")
+        show_usage_and_exit(
+            f"{PROGRAM_NAME}: --dir value '{options['dir']}' is not a valid directory\n"
+        )
 
     if "target" in options:
         if not os.path.isdir(options["target"]):
-            show_usage_and_exit(f"{PROGRAM_NAME}: --target value '{options['target']}' is not a valid directory\n")
+            show_usage_and_exit(
+                f"{PROGRAM_NAME}: --target value '{options['target']}' is not a valid directory\n"
+            )
     else:
         target = parent(options["dir"])
         options["target"] = target if target else "."
@@ -405,9 +409,9 @@ def expand_tilde_to_homedir(path: str) -> str:
         home = get_homedir_from_passwd(username=username)
     else:
         home = (
-                os.environ.get("HOME")
-                or os.environ.get("LOGDIR")
-                or get_homedir_from_passwd()
+            os.environ.get("HOME")
+            or os.environ.get("LOGDIR")
+            or get_homedir_from_passwd()
         )
 
     if not home:
@@ -415,7 +419,9 @@ def expand_tilde_to_homedir(path: str) -> str:
     return home + slash + rest
 
 
-def get_homedir_from_passwd(username: str | None = None, uid: int | None = None) -> str | None:
+def get_homedir_from_passwd(
+    username: Optional[str] = None, uid: Optional[int] = None
+) -> Optional[str]:
     try:
         if username is not None:
             return pwd.getpwnam(username).pw_dir
@@ -426,7 +432,9 @@ def get_homedir_from_passwd(username: str | None = None, uid: int | None = None)
         return None
 
 
-def show_usage_and_exit(msg: str | None = None, exit_code: int | None = None) -> None:
+def show_usage_and_exit(
+    msg: Optional[str] = None, exit_code: Optional[int] = None
+) -> None:
     """Print program usage message and exit."""
     if msg:
         print(msg, file=sys.stderr)

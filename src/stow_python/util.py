@@ -63,7 +63,7 @@ def require_directory(path: str, msg: str) -> None:
         if not stat.S_ISDIR(stat_result.st_mode):
             raise StowError(msg, errno=errno_module.ENOTDIR)
     except OSError as e:
-        raise StowError(msg, errno=e.errno) from e
+        raise StowError(msg, errno=e.errno or 1) from e
 
 
 def set_debug_level(level: int) -> None:
@@ -223,11 +223,12 @@ def move(src: str, dst: str) -> None:
     if os.path.isdir(dst) and not os.path.isdir(src):
         dst = os.path.join(dst, os.path.basename(src))
 
-    # Pre-stat for NFS robustness (like Perl's File::Copy::move)
+    # Pre-stat both files for NFS robustness (matches Perl's File::Copy::move)
     try:
         dst_stat = os.stat(dst)
+        dst_size, dst_mtime = dst_stat.st_size, dst_stat.st_mtime
     except OSError:
-        dst_stat = None
+        dst_size, dst_mtime = None, None
 
     try:
         src_size = os.stat(src).st_size
@@ -241,18 +242,20 @@ def move(src: str, dst: str) -> None:
     except OSError:
         pass
 
-    # NFS workaround: check if rename succeeded despite error
-    # This happens when the NFS server ACK is lost but the rename completed
-    if src_size is not None:
-        src_exists = os.path.exists(src)
-        if not src_exists:
-            try:
-                new_dst_stat = os.stat(dst)
-                if new_dst_stat.st_size == src_size:
-                    # Rename actually succeeded
-                    return
-            except OSError:
-                pass
+    # NFS workaround: rename may succeed but return error due to lost ACK.
+    # Detect this by checking if src is gone and dst has the expected content.
+    if src_size is not None and not os.path.exists(src):
+        try:
+            new_stat = os.stat(dst)
+            new_size, new_mtime = new_stat.st_size, new_stat.st_mtime
+            # Rename succeeded if: dst didn't exist before, OR size/mtime changed
+            dst_changed = (
+                dst_size is None or new_size != dst_size or new_mtime != dst_mtime
+            )
+            if dst_changed and new_size == src_size:
+                return
+        except OSError:
+            pass
 
     # Fall back to copy+delete for cross-filesystem moves
     shutil.copy2(src, dst)

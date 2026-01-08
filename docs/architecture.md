@@ -59,7 +59,7 @@ else:
 
 ### StowConfig
 
-Immutable configuration dataclass:
+Configuration class with the following fields:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -71,9 +71,9 @@ Immutable configuration dataclass:
 | `simulate` | bool | False | Plan but don't execute |
 | `verbose` | int | 0 | Debug output level (0-5) |
 | `compat` | bool | False | Legacy unstow algorithm |
-| `ignore` | tuple | () | Patterns to ignore |
-| `defer` | tuple | () | Patterns to defer to other packages |
-| `override` | tuple | () | Patterns to override other packages |
+| `ignore` | tuple[re.Pattern, ...] | () | Compiled regex patterns to ignore |
+| `defer` | tuple[re.Pattern, ...] | () | Compiled regex patterns to defer to other packages |
+| `override` | tuple[re.Pattern, ...] | () | Compiled regex patterns to override other packages |
 
 ### StowResult
 
@@ -99,8 +99,8 @@ class _Stower:
         self.c = config
         self.conflicts: dict[str, list[str]] = {}
         self.tasks: list[Task] = []
-        self.dir_task_for: dict[str, Task] = {}   # Track dir operations
-        self.link_task_for: dict[str, Task] = {}  # Track link operations
+        self.dir_task_for: dict[str, DirTask] = {}   # Track dir operations
+        self.link_task_for: dict[str, LinkTask] = {}  # Track link operations
 ```
 
 ### Two-Phase Execution
@@ -131,21 +131,38 @@ Operations are split into **planning** and **execution** phases:
 
 ### Task System
 
-Tasks represent deferred filesystem operations:
+Tasks represent deferred filesystem operations. Three separate dataclasses handle different operation types:
 
 ```python
+class Action(Enum):
+    CREATE = "create"
+    REMOVE = "remove"
+
 @dataclass
-class Task:
-    action: TaskAction   # CREATE, REMOVE, SKIP, MOVE
-    type: TaskType       # LINK, DIR, FILE
-    path: str            # Target path
-    source: str | None   # For links: where it points
-    dest: str | None     # For moves: destination
+class LinkTask:
+    action: Action
+    path: str
+    source: str
+    skipped: bool = False
+
+@dataclass
+class DirTask:
+    action: Action
+    path: str
+    skipped: bool = False
+
+@dataclass
+class MoveTask:
+    path: str
+    dest: str
+    skipped: bool = False
+
+Task = Union[LinkTask, DirTask, MoveTask]
 ```
 
 Tasks are tracked in dictionaries to detect conflicts:
-- `dir_task_for[path]`: Pending directory operation at path
-- `link_task_for[path]`: Pending symlink operation at path
+- `dir_task_for[path]`: Pending DirTask at path
+- `link_task_for[path]`: Pending LinkTask at path
 
 ### Tree Folding
 
@@ -208,10 +225,10 @@ A symlink is stow-owned if:
 
 Files can be ignored via:
 1. **CLI patterns**: `--ignore=REGEX`
-2. **Global ignore**: `<stow_dir>/.stow-global-ignore`
-3. **Local ignore**: `<package>/.stow-local-ignore`
+2. **Local ignore**: `<package>/.stow-local-ignore`
+3. **Global ignore**: `$HOME/.stow-global-ignore`
 
-Ignore files use regex patterns (Perl-compatible), one per line.
+The local ignore file takes precedence over the global ignore file. If neither exists, built-in defaults are used. Ignore files use regex patterns (Perl-compatible), one per line.
 
 ### Dotfiles Mode
 
@@ -243,7 +260,7 @@ The CLI catches these and formats appropriate error messages.
 - Environment variable expansion
 - Main entry point
 
-Option parsing uses `match/case` for bundled short options (`-npvS`).
+Option parsing uses if/elif chains for both long options and bundled short options (`-npvS`).
 
 ## chkstow Module
 

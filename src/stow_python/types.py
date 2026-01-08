@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
 
 
 class StowError(Exception):
@@ -56,40 +56,45 @@ class StowCLIError(StowError):
     pass
 
 
-class TaskAction(Enum):
-    """Actions that can be performed on filesystem nodes."""
+class Action(Enum):
+    """Actions for link/directory tasks."""
 
     CREATE = "create"
     REMOVE = "remove"
-    SKIP = "skip"
-    MOVE = "move"
 
 
-class TaskType(Enum):
-    """Types of filesystem nodes that tasks operate on."""
+@dataclass
+class LinkTask:
+    """Create or remove a symlink."""
 
-    LINK = "link"
-    DIR = "dir"
-    FILE = "file"
-
-
-@dataclass(slots=True)
-class Task:
-    """
-    A deferred filesystem operation.
-
-    Tasks are queued during the planning phase and executed only after
-    all potential conflicts have been assessed.
-    """
-
-    action: TaskAction
-    type: TaskType
+    action: Action
     path: str
-    source: Optional[str] = None  # For links: the symlink destination
-    dest: Optional[str] = None  # For moves: the destination path
+    source: str
+    skipped: bool = False
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass
+class DirTask:
+    """Create or remove a directory."""
+
+    action: Action
+    path: str
+    skipped: bool = False
+
+
+@dataclass
+class MoveTask:
+    """Move a file."""
+
+    path: str
+    dest: str
+    skipped: bool = False
+
+
+Task = Union[LinkTask, DirTask, MoveTask]
+
+
+@dataclass(frozen=True)
 class StowedPath:
     """Result of find_stowed_path - identifies ownership of a symlink."""
 
@@ -98,7 +103,7 @@ class StowedPath:
     package: str
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class PackageSubpath:
     """A path within a package (package name + subpath within it)."""
 
@@ -106,7 +111,7 @@ class PackageSubpath:
     subpath: str
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class MarkedStowDir:
     """A marked stow directory and the package within it."""
 
@@ -114,29 +119,46 @@ class MarkedStowDir:
     package: str
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class IgnorePatterns:
     """Compiled ignore patterns from stow ignore files."""
 
-    default_regexp: re.Pattern | None
-    local_regexp: re.Pattern | None
+    default_regexp: Optional[re.Pattern]
+    local_regexp: Optional[re.Pattern]
 
 
-@dataclass(frozen=True)
 class StowConfig:
-    """Immutable configuration for stow operations."""
+    """Configuration for stow operations."""
 
-    dir: str = "."
-    target: str | None = None  # Default: parent of dir
-    dotfiles: bool = False
-    adopt: bool = False
-    no_folding: bool = False
-    simulate: bool = False
-    verbose: int = 0
-    compat: bool = False
-    ignore: tuple[re.Pattern, ...] = ()
-    defer: tuple[re.Pattern, ...] = ()
-    override: tuple[re.Pattern, ...] = ()
+    def __init__(
+        self,
+        dir: str = ".",
+        target: Optional[str] = None,
+        dotfiles: bool = False,
+        adopt: bool = False,
+        no_folding: bool = False,
+        simulate: bool = False,
+        verbose: int = 0,
+        compat: bool = False,
+        ignore: tuple[re.Pattern, ...] = (),
+        defer: tuple[re.Pattern, ...] = (),
+        override: tuple[re.Pattern, ...] = (),
+    ):
+        import os
+
+        self.dir = dir
+        self.target: str = (
+            target if target else (os.path.dirname(dir.rstrip("/")) or ".")
+        )
+        self.dotfiles = dotfiles
+        self.adopt = adopt
+        self.no_folding = no_folding
+        self.simulate = simulate
+        self.verbose = verbose
+        self.compat = compat
+        self.ignore = ignore
+        self.defer = defer
+        self.override = override
 
 
 @dataclass

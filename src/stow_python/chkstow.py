@@ -29,16 +29,15 @@ def main() -> None:
 
     target, mode = parse_args(sys.argv[1:])
 
-    match mode:
-        case Mode.BAD_LINKS:
-            for path in find_bad_links(target):
-                print(f"Bogus link: {path}")
-        case Mode.ALIENS:
-            for path in find_aliens(target):
-                print(f"Unstowed file: {path}")
-        case Mode.LIST:
-            for pkg in list_packages(target):
-                print(pkg)
+    if mode == Mode.BAD_LINKS:
+        for path in find_bad_links(target):
+            print(f"Bogus link: {path}")
+    elif mode == Mode.ALIENS:
+        for path in find_aliens(target):
+            print(f"Unstowed file: {path}")
+    elif mode == Mode.LIST:
+        for pkg in list_packages(target):
+            print(pkg)
 
 
 def parse_args(args: list[str]) -> tuple[str, Mode]:
@@ -49,20 +48,19 @@ def parse_args(args: list[str]) -> tuple[str, Mode]:
     i = 0
     while i < len(args):
         arg = args[i]
-        match arg:
-            case "-b" | "--badlinks":
-                mode = Mode.BAD_LINKS
-            case "-a" | "--aliens":
-                mode = Mode.ALIENS
-            case "-l" | "--list":
-                mode = Mode.LIST
-            case "-t" | "--target" if i + 1 < len(args):
-                i += 1
-                target = args[i]
-            case _ if arg.startswith("--target="):
-                target = arg.removeprefix("--target=")
-            case _:
-                usage()
+        if arg in ("-b", "--badlinks"):
+            mode = Mode.BAD_LINKS
+        elif arg in ("-a", "--aliens"):
+            mode = Mode.ALIENS
+        elif arg in ("-l", "--list"):
+            mode = Mode.LIST
+        elif arg in ("-t", "--target") and i + 1 < len(args):
+            i += 1
+            target = args[i]
+        elif arg.startswith("--target="):
+            target = arg.removeprefix("--target=")
+        else:
+            usage()
         i += 1
 
     return target, mode

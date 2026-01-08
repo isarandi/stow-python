@@ -8,7 +8,7 @@ version = "2.4.1"
 description = "Stow-Python - Python reimplementation of GNU Stow symlink farm manager"
 readme = "README.md"
 license = "GPL-3.0-or-later"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 authors = [
     {name = "Istvan Sarandi", email = "istvan.sarandi@gmail.com"},
 ]
@@ -21,6 +21,7 @@ classifiers = [
     "Operating System :: POSIX",
     "Operating System :: Unix",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
