@@ -4,7 +4,21 @@ This is a pedantically faithful, single-file, dependency-free Python reimplement
 
 The reason for making this is to help transition the GNU Stow project from Perl to Python, providing a modern, maintainable codebase while preserving full compatibility with existing workflows.
 
-The goal here is identical behavior to GNU Stow, to achieve true, worry-free drop-in substitution. This is tested both with ports of the original Perl tests and with oracle tests against the Perl executable verifying identical output, return codes and filesystem state. The code follows modern Python idioms using dataclasses, enums, and pattern matching, while maintaining behavioral equivalence with GNU Stow verified through oracle testing. See [known differences](docs/perl-differences.md) for minor edge cases.
+The goal here is identical behavior to GNU Stow, to achieve true, worry-free drop-in substitution. This is tested both with ports of the original Perl tests and with oracle tests against the Perl executable verifying identical output, return codes and filesystem state. The code follows modern Python idioms using dataclasses, enums, and pattern matching, while maintaining behavioral equivalence with GNU Stow verified through oracle testing.
+
+## Bug-for-Bug Branch
+
+**This is the `pythonic-bug4bug` branch** - a paranoid, frivolous exercise in exact behavioral matching. Beyond just producing the same results, this branch ensures the Python implementation matches the Perl original at the syscall level:
+
+- **Strace-verified syscall matching**: Every filesystem operation (open, stat, lstat, readlink, symlink, unlink, chdir) occurs in the exact same order as Perl
+- **Byte-level CLI parsing**: Replicates Perl's Getopt::Long quirks, including how it handles ambiguous options and bundled flags
+- **Identical directory traversal**: Matches Perl's File::Find behavior including its chdir patterns and multi-level `chdir("../..")` optimizations
+- **Same .stowrc handling**: Opens config files in the same order, stats them the same way
+- **Replicated Perl bugs**: Even reproduces quirks like newlines in package names being silently accepted
+
+The test suite runs both implementations under strace and compares the syscall traces. This is overkill for practical use but proves the reimplementation is not just "similar" but truly equivalent.
+
+For a more sensible version that produces identical *results* without the syscall-level paranoia, see the `pythonic` branch.
 
 ## Install
 
