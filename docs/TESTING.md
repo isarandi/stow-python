@@ -1,5 +1,7 @@
 # Testing Strategy
 
+> **Note:** This document describes the planned testing approach. Not all layers are fully implemented yet.
+
 This document outlines the testing approach for Stow-Python, aiming for bulletproof reliability suitable for GNU adoption.
 
 ## Testing Layers
