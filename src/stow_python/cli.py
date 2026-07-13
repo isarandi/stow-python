@@ -14,7 +14,6 @@ import itertools
 import os
 import pwd
 import re
-import shlex
 import sys
 import traceback
 from typing import Optional, Sequence
@@ -22,6 +21,82 @@ from typing import Optional, Sequence
 from stow_python.stow import _Stower
 from stow_python.types import StowError, StowInternalError, StowCLIError, StowConfig
 from stow_python.util import VERSION, PROGRAM_NAME, parent
+
+
+# The alternation mirrors the parse_line() pattern in Text::ParseWords 3.31:
+# a double-quoted segment, a single-quoted segment, or an unquoted segment
+# followed by a delimiter (end of string, whitespace, or a quote starting the
+# next segment). Perl uses atomic groups (?>...) purely as a stack guard;
+# the match language is identical without them.
+_PARSE_LINE_RE = re.compile(
+    r'(")([^\\"]*(?:\\.[^\\"]*)*)"'
+    r"|(')([^\\']*(?:\\.[^\\']*)*)'"
+    r'|((?:\\.|[^\\"\'])*?)(\Z|\s+|(?!^)(?=["\']))',
+    re.S,
+)
+
+
+def perl_shellwords(line: str) -> list[str]:
+    """
+    Parse a line using Perl's Text::ParseWords::shellwords() semantics,
+    i.e. parse_line('\\s+', 0, $line) after stripping leading whitespace.
+
+    Faithful port of Text::ParseWords 3.31. Behaviors that differ from
+    Python's shlex.split():
+    - In double quotes, backslash escapes ANY character: \\X -> X
+    - In single quotes, backslash is copied literally, but \\X still spans
+      two characters while scanning, so \\' does not close the quote
+    - Empty quoted words ("" or '') are kept
+    - A line that fails to parse (unmatched quote, trailing lone backslash)
+      yields no words at all: parse_line returns an empty list, so the
+      whole line is dropped
+    - Words are delimited by any whitespace (\\s+), not just space/tab
+
+    This matters for .stowrc files with regex patterns like:
+        --ignore="\\.git"
+    Perl parses this as: --ignore=.git  (backslash consumed)
+    """
+    line = re.sub(r"^\s+", "", line)
+    pieces: list[Optional[str]] = []
+    word: Optional[str] = None
+
+    while line:
+        m = _PARSE_LINE_RE.match(line)
+        if m is None:
+            # Unmatched quote or trailing backslash: parse_line returns ()
+            return []
+        dq, dq_text, sq, sq_text, unquoted, delim = m.groups()
+        quote = dq if dq is not None else sq
+
+        # Perl: return() unless defined($quote) || length($unquoted) || length($delim)
+        if quote is None and not unquoted and not delim:
+            return []
+
+        if quote is not None:
+            quoted = dq_text if dq is not None else sq_text
+            # Backslash unescaping happens only inside double quotes
+            if quote == '"':
+                quoted = re.sub(r"\\(.)", r"\1", quoted, flags=re.S)
+            segment = quoted
+        else:
+            segment = re.sub(r"\\(.)", r"\1", unquoted, flags=re.S)
+
+        word = ("" if word is None else word) + segment
+        line = line[m.end() :]
+
+        # \Z and lookahead delimiters are zero-width: only real whitespace
+        # ends the word here; end-of-string is handled just below.
+        if delim:
+            pieces.append(word)
+            word = None
+        if not line:
+            pieces.append(word)
+
+    # shellwords() pops a trailing undef left by a line ending in whitespace
+    if pieces and pieces[-1] is None:
+        pieces.pop()
+    # A None can only ever be the trailing element popped above
+    return [w for w in pieces if w is not None]
 
 
 def main() -> None:
@@ -420,11 +495,9 @@ def get_config_file_options() -> tuple[dict, list[str], list[str]]:
         try:
             with open(file_path, "r") as f:
                 for line in f:
-                    line = line.rstrip("\n\r")
-                    try:
-                        defaults.extend(shlex.split(line))
-                    except ValueError:
-                        defaults.extend(line.split())
+                    # Parse like Perl's shellwords so .stowrc files
+                    # written for GNU Stow behave identically
+                    defaults.extend(perl_shellwords(line.rstrip("\n\r")))
         except (FileNotFoundError, PermissionError):
             continue  # Skip missing or unreadable files
         except IsADirectoryError:
