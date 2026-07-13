@@ -15,7 +15,7 @@ import functools
 import os
 import re
 import sys
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence
 
 from stow_python.types import (
     Action,
