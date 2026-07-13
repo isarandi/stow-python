@@ -56,22 +56,65 @@ _handler.addFilter(_verbosity_filter)
 _logger.addHandler(_handler)
 
 
-def _warn_if_newline(path: str, syscall: str) -> None:
-    """Print Perl-style warning if path contains newline."""
-    if "\n" in path:
+# Perl's stat/lstat builtins warn "Unsuccessful (l)stat on filename
+# containing newline" when the syscall FAILS on a path whose name ENDS with
+# a newline (the you-forgot-to-chomp heuristic in pp_sys.c — a newline in
+# the middle does not warn, nor does a successful call). Every file test
+# (-l, -d, -e, ...) goes through stat/lstat, so all stat-family calls in
+# stow code must use these wrappers to reproduce the warnings.
+
+def _warn_unsuccessful(path: str, syscall: str) -> None:
+    """Print Perl's warning for a failed stat/lstat on a newline path."""
+    if path.endswith("\n"):
         print(f"Unsuccessful {syscall} on filename containing newline", file=sys.stderr)
 
 
 def lstat_with_newline_warning(path: str) -> os.stat_result:
-    """lstat with Perl-style warning for paths containing newlines."""
-    _warn_if_newline(path, "lstat")
-    return os.lstat(path)
+    """os.lstat with Perl's unsuccessful-on-newline warning."""
+    try:
+        return os.lstat(path)
+    except OSError:
+        _warn_unsuccessful(path, "lstat")
+        raise
 
 
 def stat_with_newline_warning(path: str) -> os.stat_result:
-    """stat with Perl-style warning for paths containing newlines."""
-    _warn_if_newline(path, "stat")
-    return os.stat(path)
+    """os.stat with Perl's unsuccessful-on-newline warning."""
+    try:
+        return os.stat(path)
+    except OSError:
+        _warn_unsuccessful(path, "stat")
+        raise
+
+
+def islink_with_newline_warning(path: str) -> bool:
+    """os.path.islink (one lstat) with Perl's newline warning."""
+    try:
+        st = os.lstat(path)
+    except (OSError, ValueError):
+        _warn_unsuccessful(path, "lstat")
+        return False
+    return stat.S_ISLNK(st.st_mode)
+
+
+def isdir_with_newline_warning(path: str) -> bool:
+    """os.path.isdir (one stat) with Perl's newline warning."""
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        _warn_unsuccessful(path, "stat")
+        return False
+    return stat.S_ISDIR(st.st_mode)
+
+
+def exists_with_newline_warning(path: str) -> bool:
+    """os.path.exists (one stat) with Perl's newline warning."""
+    try:
+        os.stat(path)
+    except (OSError, ValueError):
+        _warn_unsuccessful(path, "stat")
+        return False
+    return True
 
 
 def require_directory(path: str, msg: str) -> None:

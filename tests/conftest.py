@@ -288,18 +288,20 @@ def normalize_stow_output(text):
 
 def normalize_newline_warnings(text):
     """
-    Filter out Perl/Python warnings about newlines in filenames.
+    Normalize Perl's newline-in-filename warnings for comparison.
 
-    These warnings come from stat/lstat internals, not stow logic,
-    and trigger in different code paths between Perl and Python.
+    Perl appends " at FILE line N." (and possibly ", <FH> line N") to these
+    warnings; the Python implementation emits the same warning text but
+    cannot reproduce Perl's source locations. Strip only that suffix so the
+    NUMBER and POSITION of warnings still take part in the stderr
+    comparison — deleting whole lines would hide a missing or extra warning.
     """
     import re
 
-    # Filter warnings about newlines in filenames
-    # e.g., "Unsuccessful lstat on filename containing newline at ... line N."
     text = re.sub(
-        r"Unsuccessful (?:l?stat) on filename containing newline at [^\n]+ line \d+\.\n",
-        "",
+        r"(Unsuccessful l?stat on filename containing newline)"
+        r" at [^\n]+ line \d+(?:, <[^>]+> line \d+)?\.",
+        r"\1",
         text,
     )
 

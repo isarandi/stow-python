@@ -43,6 +43,11 @@ from stow_python.util import (
     unadjust_dotfile,
     require_directory,
     move,
+    exists_with_newline_warning,
+    isdir_with_newline_warning,
+    islink_with_newline_warning,
+    lstat_with_newline_warning,
+    stat_with_newline_warning,
 )
 
 
@@ -374,7 +379,7 @@ class _Stower:
         pkg_path_from_cwd = join_paths(stow_path, package, pkg_subpath)
 
         # Don't try to stow absolute symlinks (they can't be unstowed)
-        if os.path.islink(pkg_path_from_cwd):
+        if islink_with_newline_warning(pkg_path_from_cwd):
             link_dest = self._read_a_link(pkg_path_from_cwd)
             if link_dest.startswith("/"):
                 self._record_conflict(
@@ -404,8 +409,8 @@ class _Stower:
             )
         elif (
             self.c.no_folding
-            and os.path.isdir(pkg_path_from_cwd)
-            and not os.path.islink(pkg_path_from_cwd)
+            and isdir_with_newline_warning(pkg_path_from_cwd)
+            and not islink_with_newline_warning(pkg_path_from_cwd)
         ):
             self._do_mkdir(target_subpath)
             self.stow_contents(self.stow_path, package, pkg_subpath, target_subpath)
@@ -493,7 +498,7 @@ class _Stower:
         """Handle stowing when target is an existing node (not a link)."""
         debug(4, 1, f"Evaluate existing node: {target_subpath}")
         if self._is_a_dir(target_subpath):
-            if not os.path.isdir(pkg_path_from_cwd):
+            if not isdir_with_newline_warning(pkg_path_from_cwd):
                 self._record_conflict(
                     package,
                     f"cannot stow non-directory {pkg_path_from_cwd} over existing directory target {target_subpath}",
@@ -503,7 +508,7 @@ class _Stower:
         else:
             # target_subpath is not a current or planned directory
             if self.c.adopt:
-                if os.path.isdir(pkg_path_from_cwd):
+                if isdir_with_newline_warning(pkg_path_from_cwd):
                     self._record_conflict(
                         package,
                         f"cannot stow directory {pkg_path_from_cwd} over existing non-directory target {target_subpath}",
@@ -547,14 +552,14 @@ class _Stower:
             # In compat mode we traverse the target tree not the source tree,
             # so we're unstowing the contents of /target/foo, there's no
             # guarantee that the corresponding /stow/mypkg/foo exists.
-            if not os.path.isdir(target_subdir):
+            if not isdir_with_newline_warning(target_subdir):
                 raise StowError(
                     f"unstow_contents() in compat mode called with non-directory target: {target_subdir}"
                 )
         else:
             # We traverse the package installation image tree not the
             # target tree, so pkg_path_from_cwd must exist.
-            if not os.path.isdir(pkg_path_from_cwd):
+            if not isdir_with_newline_warning(pkg_path_from_cwd):
                 raise StowError(
                     f"unstow_contents() called with non-directory path: {pkg_path_from_cwd}"
                 )
@@ -601,7 +606,7 @@ class _Stower:
             package_node_path = join_paths(pkg_subdir, package_node)
             self._unstow_node(package, package_node_path, target_node_path)
 
-        if not self.c.compat and os.path.isdir(target_subdir):
+        if not self.c.compat and isdir_with_newline_warning(target_subdir):
             self._cleanup_invalid_links(target_subdir)
 
     def _unstow_node(self, package: str, pkg_subpath: str, target_subpath: str) -> None:
@@ -614,12 +619,12 @@ class _Stower:
         # Does the target exist?
         if self._is_a_link(target_subpath):
             self._unstow_link_node(package, pkg_subpath, target_subpath)
-        elif os.path.isdir(target_subpath):
+        elif isdir_with_newline_warning(target_subpath):
             self.unstow_contents(package, pkg_subpath, target_subpath)
             # This action may have made the parent directory foldable
             if parent_in_pkg := self._foldable(target_subpath):
                 self._fold_tree(target_subpath, parent_in_pkg)
-        elif os.path.exists(target_subpath):
+        elif exists_with_newline_warning(target_subpath):
             debug(2, 1, f"{target_subpath} doesn't need to be unstowed")
         else:
             debug(2, 1, f"{target_subpath} did not exist to be unstowed")
@@ -654,7 +659,7 @@ class _Stower:
         pkg_path_from_cwd = join_paths(self.stow_path, package, pkg_subpath)
 
         # Does the existing target_subpath actually point to anything?
-        if os.path.exists(stowed.path):
+        if exists_with_newline_warning(stowed.path):
             if stowed.path == pkg_path_from_cwd:
                 # It points to the package we're unstowing, so unstow the link.
                 self._do_unlink(target_subpath)
@@ -673,7 +678,7 @@ class _Stower:
         cwd = os.getcwd()
         debug(2, 0, f"Cleaning up any invalid links in {dir_path} (pwd={cwd})")
 
-        if not os.path.isdir(dir_path):
+        if not isdir_with_newline_warning(dir_path):
             raise StowInternalError(
                 f"cleanup_invalid_links() called with a non-directory: {dir_path}"
             )
@@ -691,7 +696,7 @@ class _Stower:
 
             node_path = join_paths(dir_path, node)
 
-            if not os.path.islink(node_path):
+            if not islink_with_newline_warning(node_path):
                 continue
 
             debug(4, 1, f"Checking validity of link {node_path}")
@@ -715,7 +720,7 @@ class _Stower:
             target_subpath = join_paths(dir_path, link_dest)
             debug(4, 2, f"join {dir_path} {link_dest}")
 
-            if os.path.exists(target_subpath):
+            if exists_with_newline_warning(target_subpath):
                 debug(
                     4,
                     2,
@@ -851,7 +856,7 @@ class _Stower:
                 try:
                     # lstat before unlink, matching Perl's built-in unlink behavior
                     # (Perl checks if target is a directory to protect root on ancient systems)
-                    st = os.lstat(task.path)
+                    st = lstat_with_newline_warning(task.path)
                     if stat.S_ISDIR(st.st_mode):
                         raise OSError(errno.EISDIR, "Is a directory", task.path)
                     os.unlink(task.path)
@@ -929,7 +934,7 @@ class _Stower:
         global_stow_ignore = join_paths(home, GLOBAL_IGNORE_FILE)
 
         for file_path in (local_stow_ignore, global_stow_ignore):
-            if os.path.exists(file_path):
+            if exists_with_newline_warning(file_path):
                 debug(5, 1, f"Using ignore file: {file_path}")
                 return _read_ignore_file(file_path)
             else:
@@ -959,7 +964,7 @@ class _Stower:
             print(f"WARNING: skipping marked Stow directory {target}", file=sys.stderr)
             return True
 
-        if os.path.exists(join_paths(target, ".nonstow")):
+        if exists_with_newline_warning(join_paths(target, ".nonstow")):
             print(f"WARNING: skipping protected directory {target}", file=sys.stderr)
             return True
 
@@ -968,7 +973,7 @@ class _Stower:
 
     def _is_marked_stow_dir(self, dir_path: str) -> bool:
         """Check if directory contains .stow marker file."""
-        if os.path.exists(join_paths(dir_path, ".stow")):
+        if exists_with_newline_warning(join_paths(dir_path, ".stow")):
             debug(5, 5, f"> {dir_path} contained .stow")
             return True
         return False
@@ -1121,7 +1126,7 @@ class _Stower:
                 )
                 return True
 
-        if os.path.islink(target_path):
+        if islink_with_newline_warning(target_path):
             debug(4, 2, f"is_a_link({target_path}): is a real link")
             return not self._is_parent_link_scheduled_for_removal(target_path)
 
@@ -1141,7 +1146,7 @@ class _Stower:
         if self._is_parent_link_scheduled_for_removal(target_path):
             return False
 
-        if os.path.isdir(target_path):
+        if isdir_with_newline_warning(target_path):
             debug(4, 1, f"is_a_dir({target_path}): real dir")
             return True
 
@@ -1181,7 +1186,7 @@ class _Stower:
         if self._is_parent_link_scheduled_for_removal(target_path):
             return False
 
-        if os.path.exists(target_path):
+        if exists_with_newline_warning(target_path):
             debug(4, 3, f"| is_a_node({target_path}): really exists")
             return True
 
@@ -1201,7 +1206,7 @@ class _Stower:
                     f"read_a_link() passed a path that is scheduled for removal: {link}"
                 )
 
-        elif os.path.islink(link):
+        elif islink_with_newline_warning(link):
             debug(4, 2, f"read_a_link({link}): is a real link")
             try:
                 return os.readlink(link)

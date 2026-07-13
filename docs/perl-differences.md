@@ -114,6 +114,10 @@ Perl stow's CLI is parsed by Getopt::Long with `no_ignore_case`, `bundling` and 
 
 Perl's `die` exits with `$!` (the errno of the last failed syscall) when it is nonzero, else 255. For example `stow a/b` ("Slashes are not permitted in package names") normally exits 2, because probing the nonexistent `.stowrc` just before left ENOENT in errno — but exits 255 if a `.stowrc` exists. We hardcode the common-flow exit codes (e.g. 2 for the slashes error) rather than emulating errno tracking; runs with an unusual preceding syscall pattern may differ.
 
+### Newline Warnings
+
+Perl's stat/lstat builtins print `Unsuccessful (l)stat on filename containing newline` when the call FAILS on a filename that ENDS with a newline (the forgot-to-chomp heuristic; a newline in the middle does not warn). We reproduce this at every stat-family call site. The `at FILE line N.` location suffix of Perl's warnings cannot be reproduced and is normalized away in the test harness.
+
 ---
 
 ## Testing
