@@ -19,7 +19,9 @@ class Mode(Enum):
     LIST = auto()
 
 
-DEFAULT_TARGET = os.environ.get("STOW_DIR", "/usr/local/")
+# "or" (not a default argument) so an empty STOW_DIR also falls back,
+# like Perl's $ENV{STOW_DIR} || fallback
+DEFAULT_TARGET = os.environ.get("STOW_DIR") or "/usr/local/"
 
 
 def main() -> None:

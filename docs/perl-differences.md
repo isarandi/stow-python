@@ -178,6 +178,10 @@ Perl's Getopt::Long consumes `--` and leaves the remaining arguments in `@ARGV`,
 
 Perl's `die` exits with `$!` — the errno left over from the *last failed syscall*, which is accidental: `stow a/b` ("Slashes are not permitted...") exits 2 if no `.stowrc` exists (ENOENT from probing it) but 255 if one does. We use intentional, stable exit codes instead (nonzero on error, documented per message). Scripts should test for nonzero rather than specific values.
 
+## 15. chkstow Follows a Symlinked Target
+
+Perl's File::Find does not descend through a top-level symlink argument, so `chkstow -t <symlink-to-dir>` silently checks nothing and exits 0 — an "all clear" from a diagnostic tool that inspected nothing. We follow the explicitly given target (and only that; symlinks *inside* the tree are still not descended). Covered by a pinning test asserting both behaviors.
+
 ---
 
 ## Syscall Normalization (Not a Behavioral Difference)

@@ -172,3 +172,32 @@ class TestChkstowBoth:
         assert_chkstow_match(chkstow_env, ["-b", "-t", "."])
         _, _, stderr = chkstow_env.run_python_chkstow(["-b", "-t", "."])
         assert re.search(r"skipping.*stow", stderr, re.IGNORECASE), f"Expected skip warning, got stderr: {stderr}"
+
+
+class TestChkstowSymlinkTarget:
+    """Pin the intentional divergence for a symlinked target directory.
+
+    Perl's File::Find does not descend through a top-level symlink, so
+    "chkstow -t <symlink>" silently checks nothing and reports all clear —
+    a footgun for a diagnostic tool. We deliberately follow the explicit
+    top-level target instead (interior symlinks are still not followed).
+    See docs/perl-differences.md.
+    """
+
+    def test_symlinked_target_is_followed(self, chkstow_env):
+        real = os.path.join(chkstow_env.tmpdir, "realtarget")
+        os.makedirs(real)
+        with open(os.path.join(real, "alien"), "w") as f:
+            f.write("x")
+        link = os.path.join(chkstow_env.tmpdir, "linktarget")
+        os.symlink("realtarget", link)
+
+        # Python reports the alien file inside the symlinked target
+        rc, stdout, stderr = chkstow_env.run_python_chkstow(["-a", "-t", link])
+        assert rc == 0
+        assert "Unstowed file:" in stdout and "alien" in stdout
+
+        # Perl silently reports nothing
+        rc, stdout, stderr = chkstow_env.run_perl_chkstow(["-a", "-t", link])
+        assert rc == 0
+        assert stdout.strip() == ""
