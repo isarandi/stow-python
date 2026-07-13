@@ -98,6 +98,22 @@ Perl's `File::Spec::Unix->canonpath()` normalizes paths but does NOT resolve `..
 
 We implement a custom `canonpath()` function that matches Perl's exact behavior, including the rules for collapsing leading `/../` sequences after root. Note that at runtime Perl uses PathTools' XS (C) `canonpath`, which differs from the pure-Perl fallback source on some edge cases (e.g. `"/..\n"` is not rewritten by XS); we match the XS behavior, verified by fuzzing against `File::Spec` directly.
 
+### Getopt::Long Option Parsing
+
+Perl stow's CLI is parsed by Getopt::Long with `no_ignore_case`, `bundling` and `permute`, which implies a number of behaviors we replicate exactly:
+
+- Any option name or alias works in long form (`--R`, `--n`, `--t DIR`)
+- Unique prefixes are auto-abbreviated (`--tar DIR`, `--verb`); ambiguous prefixes are fatal (`Option ver is ambiguous (verbose, version)`); `POSIXLY_CORRECT` disables abbreviation (and the `+` prefix)
+- A value option at the end of a bundle consumes the next argument (`-nt DIR`)
+- `--verbose`/`-v`/`+verbose` consume a following integer argument as the level (`-v 2`), where "integer" allows a sign and one trailing newline (Perl's `$`-anchored check)
+- An empty attached value for a string option (`--dir=`) is a missing argument, but an empty separate argument (`-d ""`) is accepted
+- Everything after `--` is left in `@ARGV`, which stow never reads — those arguments are silently discarded
+- `+option` forms accept space-separated values but not `=` values
+
+### Exit Codes on die()
+
+Perl's `die` exits with `$!` (the errno of the last failed syscall) when it is nonzero, else 255. For example `stow a/b` ("Slashes are not permitted in package names") normally exits 2, because probing the nonexistent `.stowrc` just before left ENOENT in errno — but exits 255 if a `.stowrc` exists. We hardcode the common-flow exit codes (e.g. 2 for the slashes error) rather than emulating errno tracking; runs with an unusual preceding syscall pattern may differ.
+
 ---
 
 ## Testing
