@@ -573,28 +573,29 @@ def check_file(env, path):
     assert not os.path.islink(full_path), f"{path} should not be a symlink"
 
 
-def run_perl_and_check(env, args, check_func):
+def run_perl_and_check(env, args, check_func, env_vars=None):
     """Run Perl stow and verify assertions."""
-    env.run_perl_stow(args)
+    env.run_perl_stow(args, env=env_vars)
     check_func(env)
     return env.get_filesystem_state()
 
 
-def run_python_and_check(env, args, check_func):
+def run_python_and_check(env, args, check_func, env_vars=None):
     """Run Python stow and verify assertions."""
-    env.run_python_stow(args)
+    env.run_python_stow(args, env=env_vars)
     check_func(env)
     return env.get_filesystem_state()
 
 
 def run_both_tests(env, args, setup_func, check_func=None, check_on_simulate=False,
-                   compare_fs_ops=False):
+                   compare_fs_ops=False, check_func_posixly=None):
     """
     Run comprehensive oracle test with both execute and simulate modes.
 
     1. Runs behavioral assertions (if check_func provided) on the appropriate mode
     2. Asserts Perl vs Python match for BOTH modes (-n and without -n)
     3. Optionally compares filesystem operations via strace
+    4. Runs ALL of the above with AND without POSIXLY_CORRECT env var
 
     Args:
         env: StowTestEnv instance
@@ -603,7 +604,29 @@ def run_both_tests(env, args, setup_func, check_func=None, check_on_simulate=Fal
         check_func: optional callable for behavioral assertions
         check_on_simulate: if True, run check_func on simulate mode; else on execute
         compare_fs_ops: if True, capture and compare filesystem operations
+        check_func_posixly: behavioral assertions for the POSIXLY_CORRECT
+            pass, when the expected outcome differs there (e.g. + options
+            are disabled and become package names); defaults to check_func
     """
+    # Run tests in both POSIXLY_CORRECT modes
+    for posixly_correct in [False, True]:
+        mode_check = check_func
+        if posixly_correct and check_func_posixly is not None:
+            mode_check = check_func_posixly
+        _run_both_tests_impl(
+            env, args, setup_func, mode_check, check_on_simulate,
+            compare_fs_ops, posixly_correct
+        )
+
+
+def _run_both_tests_impl(env, args, setup_func, check_func, check_on_simulate,
+                         compare_fs_ops, posixly_correct):
+    """
+    Internal implementation of run_both_tests for a specific POSIXLY_CORRECT setting.
+    """
+    # Set up environment for this run
+    extra_env = {"POSIXLY_CORRECT": ""} if posixly_correct else {}
+
     # Determine args for both modes
     args_execute = list(args)
     args_simulate = ["-n"] + list(args)
@@ -614,20 +637,20 @@ def run_both_tests(env, args, setup_func, check_func=None, check_on_simulate=Fal
 
         env.reset_target()
         setup_func()
-        run_perl_and_check(env, check_args, check_func)
+        run_perl_and_check(env, check_args, check_func, env_vars=extra_env)
 
         env.reset_target()
         setup_func()
-        run_python_and_check(env, check_args, check_func)
+        run_python_and_check(env, check_args, check_func, env_vars=extra_env)
 
     # Assert Perl vs Python match for BOTH modes
     # Pass setup_func to assert functions - they handle reset+setup internally
-    assert_stow_match(env, args_simulate, setup_func)
+    assert_stow_match(env, args_simulate, setup_func, env=extra_env)
 
     if compare_fs_ops:
-        assert_stow_match_with_fs_ops(env, args_execute, setup_func)
+        assert_stow_match_with_fs_ops(env, args_execute, setup_func, env=extra_env)
     else:
-        assert_stow_match(env, args_execute, setup_func)
+        assert_stow_match(env, args_execute, setup_func, env=extra_env)
 
 
 def is_stow_relevant_path(path):
