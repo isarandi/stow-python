@@ -144,16 +144,21 @@ class StowTestEnv:
 
     def get_filesystem_state(self):
         """
-        Get a snapshot of the target directory state.
+        Get a snapshot of the whole test tree state (target AND stow dir).
 
-        Returns a dict mapping paths to tuples:
+        The stow dir must be included so that mutations of package contents
+        (e.g. by --adopt) are part of the Perl-vs-Python comparison, not just
+        the target side. Harness fixtures under $HOME (= tmpdir, e.g. .stowrc)
+        are created identically for both runs, so including them is harmless.
+
+        Returns a dict mapping paths (relative to tmpdir) to tuples:
         - ('dir', mode, uid, gid) for directories
         - ('file', content, mode, uid, gid) for files
         - ('link', target) for symlinks (perms not checked, usually 0o777)
         """
         state = {}
-        for root, dirs, files in os.walk(self.target_dir, followlinks=False):
-            rel_root = os.path.relpath(root, self.target_dir)
+        for root, dirs, files in os.walk(self.tmpdir, followlinks=False):
+            rel_root = os.path.relpath(root, self.tmpdir)
             if rel_root == ".":
                 rel_root = ""
 
@@ -454,9 +459,9 @@ def assert_chkstow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
     """
     import tempfile
 
-    # Check if strace is available
+    # See assert_stow_match_with_fs_ops: never degrade silently.
     if shutil.which('strace') is None:
-        return assert_chkstow_match(stow_env, args, setup_func, env)
+        pytest.skip("strace not available - syscall comparison cannot run")
 
     tmpdir = stow_env.tmpdir
 
@@ -995,10 +1000,11 @@ def assert_stow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
     """
     import tempfile
 
-    # Check if strace is available
+    # Syscall comparison is a core guarantee of this suite; never degrade
+    # silently. CI asserts strace is installed, so this skip can only
+    # happen on dev machines without strace.
     if shutil.which('strace') is None:
-        # Fall back to regular comparison if strace not available
-        return assert_stow_match(stow_env, args, env)
+        pytest.skip("strace not available - syscall comparison cannot run")
 
     tmpdir = stow_env.tmpdir
 

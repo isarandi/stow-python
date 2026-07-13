@@ -62,6 +62,13 @@ jobs:
       - name: Fix permissions
         run: chmod +x tests/gnu_stow_for_testing/bin/*
 
+      # The syscall-comparison layer skips without strace; CI must never
+      # run in that degraded mode, so fail hard if strace is missing.
+      - name: Ensure strace is available
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq strace
+          strace --version
+
       - name: Run tests
         run: pytest tests/ -v
 
