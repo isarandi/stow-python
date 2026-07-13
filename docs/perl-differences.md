@@ -169,6 +169,15 @@ This is an extremely unlikely scenario. The check is legacy protection for ancie
 
 Perl's Getopt::Long consumes `--` and leaves the remaining arguments in `@ARGV`, which stow never reads — so everything after `--` is *silently discarded* and stow reports "No packages to stow or unstow". That is clearly unintended. We implement the standard POSIX behavior: arguments after `--` are package names, which also makes packages with leading dashes usable (`stow -- -my-pkg`).
 
+## 12. Invalid Option Values Abort Cleanly
+
+- `--verbose=xyz` aborts with `Value "xyz" invalid for option verbose (number expected)` before any filesystem modification (Perl does the same).
+- A malformed `--ignore`/`--defer`/`--override` regex (e.g. `foo(`) or a malformed pattern in an ignore file produces a clean `Failed to compile regexp` error. Perl-only regex syntax such as `\Q...\E` is not supported and fails the same way, whereas Perl warns `Unrecognized escape` and proceeds.
+
+## 13. Exit Codes on Fatal Errors
+
+Perl's `die` exits with `$!` — the errno left over from the *last failed syscall*, which is accidental: `stow a/b` ("Slashes are not permitted...") exits 2 if no `.stowrc` exists (ENOENT from probing it) but 255 if one does. We use intentional, stable exit codes instead (nonzero on error, documented per message). Scripts should test for nonzero rather than specific values.
+
 ---
 
 ## Syscall Normalization (Not a Behavioral Difference)

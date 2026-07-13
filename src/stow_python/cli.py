@@ -186,6 +186,20 @@ def process_options() -> tuple[dict, list[str], list[str]]:
     return (options, pkgs_to_unstow, pkgs_to_stow)
 
 
+def _compile_option_regex(pattern: str, option: str) -> re.Pattern:
+    """Compile a user-supplied --ignore/--defer/--override regex.
+
+    A malformed pattern must produce a clean fatal error, not a traceback.
+    Note that Perl-only regex syntax (e.g. \\Q...\\E) is not supported and
+    also ends up here.
+    """
+    try:
+        return re.compile(pattern)
+    except re.error as e:
+        show_usage_and_exit(f"Failed to compile regexp for --{option}: {e}")
+        raise AssertionError("unreachable")  # show_usage_and_exit exits
+
+
 def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
     """Parse command line options.
 
@@ -239,35 +253,55 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
         elif arg == "--ignore" and i + 1 < len(args):
             i += 1
             regex = args[i]
-            options.setdefault("ignore", []).append(re.compile(rf"({regex})\Z"))
+            options.setdefault("ignore", []).append(
+                _compile_option_regex(rf"({regex})\Z", "ignore")
+            )
         elif arg.startswith("--ignore="):
             regex = arg[9:]
-            options.setdefault("ignore", []).append(re.compile(rf"({regex})\Z"))
+            options.setdefault("ignore", []).append(
+                _compile_option_regex(rf"({regex})\Z", "ignore")
+            )
 
         elif arg == "--override" and i + 1 < len(args):
             i += 1
             regex = args[i]
-            options.setdefault("override", []).append(re.compile(rf"\A({regex})"))
+            options.setdefault("override", []).append(
+                _compile_option_regex(rf"\A({regex})", "override")
+            )
         elif arg.startswith("--override="):
             regex = arg[11:]
-            options.setdefault("override", []).append(re.compile(rf"\A({regex})"))
+            options.setdefault("override", []).append(
+                _compile_option_regex(rf"\A({regex})", "override")
+            )
 
         elif arg == "--defer" and i + 1 < len(args):
             i += 1
             regex = args[i]
-            options.setdefault("defer", []).append(re.compile(rf"\A({regex})"))
+            options.setdefault("defer", []).append(
+                _compile_option_regex(rf"\A({regex})", "defer")
+            )
         elif arg.startswith("--defer="):
             regex = arg[8:]
-            options.setdefault("defer", []).append(re.compile(rf"\A({regex})"))
+            options.setdefault("defer", []).append(
+                _compile_option_regex(rf"\A({regex})", "defer")
+            )
 
         # Verbose option with optional value
         elif arg in ("-v", "--verbose"):
             options["verbose"] = options.get("verbose", 0) + 1
         elif arg.startswith("--verbose="):
-            try:
-                options["verbose"] = int(arg[10:])
-            except ValueError:
-                options["verbose"] = 1
+            value = arg[10:]
+            if value == "":
+                options["verbose"] = options.get("verbose", 0) + 1
+            else:
+                try:
+                    options["verbose"] = int(value)
+                except ValueError:
+                    # Abort like Perl instead of silently proceeding with
+                    # a default level and modifying the filesystem
+                    show_usage_and_exit(
+                        f'Value "{value}" invalid for option verbose (number expected)'
+                    )
 
         # Boolean flags
         elif arg in ("-n", "--no", "--simulate"):

@@ -1378,7 +1378,9 @@ def _compile_ignore_patterns(patterns: set[str]) -> IgnorePatterns:
             combined = "|".join(path_patterns)
             path_regexp = re.compile(f"(^|/)({combined})(/|$)")
     except re.error as e:
-        raise RuntimeError(f"Failed to compile regexp: {e}")
+        # StowError produces a clean "stow: ERROR: ..." message instead of
+        # a traceback when an ignore file contains a malformed pattern
+        raise StowError(f"Failed to compile regexp: {e}")
 
     return IgnorePatterns(path_regexp, segment_regexp)
 

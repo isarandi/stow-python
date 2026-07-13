@@ -376,3 +376,52 @@ class TestCliOptionsBoth:
         assert "No packages to stow or unstow" in stderr
         check_not_exists(stow_env, "file")
 
+    def test_verbose_invalid_value_aborts(self, stow_env):
+        """--verbose=xyz must abort before touching the filesystem."""
+        stow_env.create_package("pkg", {"file": "content"})
+
+        def setup():
+            pass
+
+        def check(env):
+            # The invalid option value aborted the run: nothing was stowed
+            check_not_exists(env, "file")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--verbose=xyz", "pkg"],
+            setup,
+            check,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+    def test_malformed_regex_fails_cleanly(self, stow_env):
+        """A malformed --ignore regex must give a clean error, no traceback."""
+        stow_env.create_package("pkg", {"file": "content"})
+
+        stow_env.reset_target()
+        rc, stdout, stderr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "--ignore", "foo(", "pkg"]
+        )
+        assert rc != 0
+        assert "Failed to compile regexp" in stderr
+        assert "Traceback" not in stderr
+        check_not_exists(stow_env, "file")
+
+    def test_malformed_ignore_file_regex_fails_cleanly(self, stow_env):
+        """A malformed pattern in .stow-local-ignore errors without traceback."""
+        stow_env.create_package("pkg", {"file": "content"})
+        with open(
+            os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore"), "w"
+        ) as f:
+            f.write("foo(\n")
+
+        stow_env.reset_target()
+        rc, stdout, stderr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "pkg"]
+        )
+        assert rc != 0
+        assert "Failed to compile regexp" in stderr
+        assert "Traceback" not in stderr
+        check_not_exists(stow_env, "file")
