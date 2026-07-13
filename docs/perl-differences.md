@@ -89,6 +89,15 @@ We implement `perl_shellwords()` as a faithful port of the `parse_line()`
 loop in Text::ParseWords 3.31, verified by fuzzing against the real Perl
 module, so `.stowrc` files parse identically in both implementations.
 
+### canonpath Path Normalization
+
+Perl's `File::Spec::Unix->canonpath()` normalizes paths but does NOT resolve `..` in the middle of paths (unlike Python's `os.path.normpath`):
+
+- Perl: `canonpath("/a/b/../c")` → `/a/b/../c` (unchanged)
+- Python `os.path.normpath`: `/a/b/../c` → `/a/c` (resolved)
+
+We implement a custom `canonpath()` function that matches Perl's exact behavior, including the rules for collapsing leading `/../` sequences after root. Note that at runtime Perl uses PathTools' XS (C) `canonpath`, which differs from the pure-Perl fallback source on some edge cases (e.g. `"/..\n"` is not rewritten by XS); we match the XS behavior, verified by fuzzing against `File::Spec` directly.
+
 ---
 
 ## Testing
