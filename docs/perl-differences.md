@@ -63,6 +63,32 @@ We replicate this exactly, including the multi-level chdir optimization.
 
 When using `--adopt` to move a file into the stow package, the `rename()` syscall might "fail" even though it succeeded - this happens on NFS when the server completes the operation but the acknowledgment is lost. Perl's `File::Copy::move` handles this by checking if the source file disappeared and the destination has the expected size. We implement the same check.
 
+### Perl-Compatible shellwords for .stowrc
+
+Perl's `Text::ParseWords::shellwords` has different semantics than Python's `shlex.split()`:
+
+- **Double quotes**: `\X` → `X` for ANY character (Perl consumes the backslash)
+- **Single quotes**: backslash is copied literally, but `\X` still spans two
+  characters while scanning, so `\'` does NOT close the quote
+- **Unquoted**: `\X` → `X` for ANY character
+- **Empty quoted words** (`""` or `''`) are kept as empty words
+- **Parse failure** (unmatched quote or trailing lone backslash) makes the
+  WHOLE line yield no words at all
+- Words are delimited by any whitespace (`\s+`), not just space/tab
+
+Python's `shlex.split()` only escapes specific characters in double quotes (`\`, `"`, `$`, backtick, newline), preserving other backslash sequences literally, and it raises on unmatched quotes instead of dropping the line.
+
+This matters for `.stowrc` regex patterns:
+```
+--ignore="\.git"
+```
+- Perl parses as: `--ignore=.git` (dot matches ANY character)
+- Python shlex would give: `--ignore=\.git` (literal dot)
+
+We implement `perl_shellwords()` as a faithful port of the `parse_line()`
+loop in Text::ParseWords 3.31, verified by fuzzing against the real Perl
+module, so `.stowrc` files parse identically in both implementations.
+
 ---
 
 ## Testing
