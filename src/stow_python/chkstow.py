@@ -20,7 +20,10 @@ class Mode(Enum):
     LIST = auto()
 
 
-DEFAULT_TARGET = os.environ.get("STOW_DIR", "/usr/local/")
+# Perl: $ENV{STOW_DIR} || '/usr/local/' — Perl truthiness makes both the
+# empty string and "0" fall back to the default, not just an unset variable.
+_stow_dir_env = os.environ.get("STOW_DIR")
+DEFAULT_TARGET = "/usr/local/" if _stow_dir_env in (None, "", "0") else _stow_dir_env
 
 
 def main() -> None:
@@ -147,8 +150,30 @@ def _walk_target(target: str, wanted) -> Iterator[str]:
     """
     # File::Find saves cwd at start and returns to it at end
     start_cwd = os.getcwd()
-    # Perl lstats the initial target twice
-    os.lstat(target)
+    st = os.lstat(target)
+
+    # File::Find does NOT descend a top-level argument that is not a
+    # directory (note: a symlink to a directory is still a symlink here).
+    # It chdirs to the argument's parent, lstats the basename again, calls
+    # wanted() on it once, and chdirs back. $File::Find::name is "./x" for
+    # a bare relative name, the argument as given otherwise. So e.g.
+    # "chkstow -a -t <symlink>" silently checks nothing inside the link.
+    if not stat.S_ISDIR(st.st_mode):
+        dirname, basename = os.path.split(target)
+        if dirname:
+            full_name = target
+            os.chdir(dirname + "/")
+        else:
+            full_name = "./" + target
+            os.chdir("./")
+        st = os.lstat(basename)
+        result = wanted(basename, full_name, stat.S_ISLNK(st.st_mode))
+        if result is not None:
+            yield result
+        os.chdir(start_cwd)
+        return
+
+    # Perl lstats the initial (directory) target twice
     os.lstat(target)
 
     # Track depth for multi-level chdir back
