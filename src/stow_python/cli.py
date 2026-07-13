@@ -95,15 +95,20 @@ def _main() -> None:
 
 
 def _parse_bundled_options(
-    chars: str, options: dict, action: str
-) -> tuple[str, bool, bool, bool]:
-    """Parse bundled short options like -npvS.
+    args: Sequence[str], arg_index: int, options: dict, action: str
+) -> tuple[str, int, bool, bool, bool]:
+    """Parse bundled short options like -npvS at args[arg_index].
 
-    Returns (action, has_any_unknown_options, should_show_help, should_show_version).
+    A value-taking option (d, t) at the end of a bundle consumes the next
+    command-line argument, so `-nt DIR` works like `-n -t DIR`.
+
+    Returns (action, next_arg_index, has_any_unknown_options,
+    should_show_help, should_show_version).
     """
     has_any_unknown_options = False
     should_show_help = False
     should_show_version = False
+    chars = args[arg_index][1:]
     i = 0
 
     while i < len(chars):
@@ -135,14 +140,26 @@ def _parse_bundled_options(
             options["dir" if char == "d" else "target"] = rest
             i += len(rest)
         elif char in ("d", "t"):
-            show_usage_and_exit(f"Option {char} requires an argument")
+            # Last character of the bundle: take the next argument as the
+            # value, like tar -xf FILE or ssh -p PORT
+            if arg_index + 1 < len(args):
+                arg_index += 1
+                options["dir" if char == "d" else "target"] = args[arg_index]
+            else:
+                show_usage_and_exit(f"Option {char} requires an argument")
         else:
             print(f"Unknown option: {char}", file=sys.stderr)
             # Perl stops after first unknown option in a bundle
-            return action, True, should_show_help, should_show_version
+            return action, arg_index, True, should_show_help, should_show_version
         i += 1
 
-    return action, has_any_unknown_options, should_show_help, should_show_version
+    return (
+        action,
+        arg_index,
+        has_any_unknown_options,
+        should_show_help,
+        should_show_version,
+    )
 
 
 def process_options() -> tuple[dict, list[str], list[str]]:
@@ -186,8 +203,24 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
     while i < len(args):
         arg = args[i]
 
+        # POSIX "--" terminator: everything after it is a package name,
+        # even if it starts with "-". (Perl stow silently DISCARDS the
+        # arguments after "--" because Getopt::Long leaves them in @ARGV
+        # unread; that is clearly unintended, so we diverge deliberately —
+        # see docs/perl-differences.md.)
+        if arg == "--":
+            for pkg in args[i + 1 :]:
+                if action == "restow":
+                    pkgs_to_unstow.append(pkg)
+                    pkgs_to_stow.append(pkg)
+                elif action == "unstow":
+                    pkgs_to_unstow.append(pkg)
+                else:
+                    pkgs_to_stow.append(pkg)
+            break
+
         # Handle options with values
-        if arg in ("-d", "--dir") and i + 1 < len(args):
+        elif arg in ("-d", "--dir") and i + 1 < len(args):
             i += 1
             options["dir"] = args[i]
         elif arg.startswith("--dir="):
@@ -286,9 +319,13 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
 
         else:
             # Bundled short options: -xyz is parsed as -x -y -z
-            action, has_any_unknown_options, should_show_help, should_show_version = (
-                _parse_bundled_options(arg[1:], options, action)
-            )
+            (
+                action,
+                i,
+                has_any_unknown_options,
+                should_show_help,
+                should_show_version,
+            ) = _parse_bundled_options(args, i, options, action)
             if has_any_unknown_options:
                 show_usage_and_exit(exit_code=1)
             if should_show_help:

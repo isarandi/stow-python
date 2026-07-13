@@ -324,3 +324,55 @@ class TestCliOptionsBoth:
             check_on_simulate=False,
             compare_fs_ops=True,
         )
+
+    def test_bundled_short_option_with_value_argument(self, stow_env):
+        """A value option ending a bundle takes the next argument: -St DIR.
+
+        This matches Perl's Getopt::Long bundling and common Unix muscle
+        memory (tar -xf FILE), so it is verified against the oracle.
+        """
+        stow_env.create_package("pkg", {"file": "content"})
+
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "file", "../stow/pkg/file")
+
+        run_both_tests(
+            stow_env,
+            ["-St", stow_env.target_dir, "pkg"],
+            setup,
+            check,
+            check_on_simulate=False,
+            compare_fs_ops=True,
+        )
+
+    def test_double_dash_treats_rest_as_packages(self, stow_env):
+        """POSIX "--" terminator: intentional divergence from Perl.
+
+        Perl's Getopt::Long leaves the arguments after -- in @ARGV, which
+        stow never reads, so they are silently discarded ("No packages to
+        stow or unstow"). We deliberately implement the standard POSIX
+        behavior instead: the remaining arguments are package names. This
+        test pins BOTH behaviors so the divergence cannot drift unnoticed.
+        """
+        stow_env.create_package("pkg", {"file": "content"})
+
+        # Python: pkg after -- is stowed
+        stow_env.reset_target()
+        rc, stdout, stderr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "--", "pkg"]
+        )
+        assert rc == 0, f"Expected success, got rc={rc}: {stderr}"
+        check_link(stow_env, "file", "../stow/pkg/file")
+
+        # Perl: pkg after -- is discarded and stow errors out
+        stow_env.reset_target()
+        rc, stdout, stderr = stow_env.run_perl_stow(
+            ["-t", stow_env.target_dir, "--", "pkg"]
+        )
+        assert rc != 0, "Perl should report no packages"
+        assert "No packages to stow or unstow" in stderr
+        check_not_exists(stow_env, "file")
+

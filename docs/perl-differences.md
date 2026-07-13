@@ -165,6 +165,10 @@ This is an extremely unlikely scenario. The check is legacy protection for ancie
 
 **Testing implication:** Oracle tests for chkstow compare only return code, stdout, and stderr - not filesystem operations via strace. The output matching is sufficient to verify behavioral equivalence.
 
+## 11. `--` Terminator: Packages, Not Discarded
+
+Perl's Getopt::Long consumes `--` and leaves the remaining arguments in `@ARGV`, which stow never reads — so everything after `--` is *silently discarded* and stow reports "No packages to stow or unstow". That is clearly unintended. We implement the standard POSIX behavior: arguments after `--` are package names, which also makes packages with leading dashes usable (`stow -- -my-pkg`).
+
 ---
 
 ## Syscall Normalization (Not a Behavioral Difference)
