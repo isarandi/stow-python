@@ -107,6 +107,7 @@ def run_subtests(
     setup_func=None,
     setup_opts=None,
     check_compat_stderr=None,
+    check_stderr=None,
 ):
     """
     Run a subtest twice: with compat off then on, in parallel test trees.
@@ -118,6 +119,9 @@ def run_subtests(
         setup_func: optional callable taking test_dir and returning opts dict
         setup_opts: optional dict of options to pass to Stow constructor
         check_compat_stderr: optional callable taking stderr string for compat mode verification
+        check_stderr: optional callable taking stderr string, checked in BOTH
+            modes (the Perl original asserts these warnings via stderr_like
+            inside the subtest body, which runs in both modes)
     """
     # Derive test_dir and compat_test_dir from abs_test_dir
     test_dir = abs_test_dir
@@ -140,7 +144,11 @@ def run_subtests(
         make_path(opts["dir"])
 
     stow = new_Stow(**opts)
-    test_func(stow, test_dir)
+    stderr_capture = StringIO()
+    with redirect_stderr(stderr_capture):
+        test_func(stow, test_dir)
+    if check_stderr:
+        check_stderr(stderr_capture.getvalue())
 
     # Compat mode - capture stderr for verification
     os.environ["HOME"] = compat_abs_test_dir
@@ -167,6 +175,8 @@ def run_subtests(
     # If a compat stderr check function is provided, run it
     if check_compat_stderr:
         check_compat_stderr(stderr_capture.getvalue())
+    if check_stderr:
+        check_stderr(stderr_capture.getvalue())
 
 
 class TestUnstowSimpleTree:
@@ -366,7 +376,7 @@ class TestDontUnlinkUnderAnotherStowDir:
             )
 
         def check_stderr(stderr):
-            # In compat mode, should warn about skipping marked Stow directory stow2
+            # Perl asserts this warning in BOTH modes (stderr_like in body)
             assert re.search(
                 r"WARNING.*skipping marked Stow directory stow2", stderr
             ), "Should warn when skipping marked Stow directory stow2"
@@ -376,7 +386,7 @@ class TestDontUnlinkUnderAnotherStowDir:
             test_func,
             stow_test_env,
             setup_func=setup_func,
-            check_compat_stderr=check_stderr,
+            check_stderr=check_stderr,
         )
 
 
