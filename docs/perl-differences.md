@@ -165,6 +165,15 @@ This is an extremely unlikely scenario. The check is legacy protection for ancie
 
 **Testing implication:** Oracle tests for chkstow compare only return code, stdout, and stderr - not filesystem operations via strace. The output matching is sufficient to verify behavioral equivalence.
 
+## 10. Getopt::Long Incidentals Not Supported
+
+Perl's Getopt::Long provides several undocumented conveniences that GNU Stow never mentions in its manual and that we deliberately do not reproduce:
+
+- **Long-option abbreviation**: `--sim`, `--tar`, `--verb` work in Perl (any unique prefix); we require the full name. Perl also accepts every alias in long form (`--R`, `--n`, `--t DIR`).
+- **`-v N` value gobbling**: Perl's `verbose|v:+` spec consumes a following integer argument (`stow -v 2 pkg` sets level 2); we treat `2` as a package name and fail loudly.
+
+In all these cases the failure is a clear error with a nonzero exit code — never silent misbehavior. The bundled form `-nt DIR` / `-nd DIR` (a value option ending a short-option bundle taking the next argument) IS supported, since it matches universal Unix conventions (`tar -xf FILE`).
+
 ## 11. `--` Terminator: Packages, Not Discarded
 
 Perl's Getopt::Long consumes `--` and leaves the remaining arguments in `@ARGV`, which stow never reads — so everything after `--` is *silently discarded* and stow reports "No packages to stow or unstow". That is clearly unintended. We implement the standard POSIX behavior: arguments after `--` are package names, which also makes packages with leading dashes usable (`stow -- -my-pkg`).
@@ -177,6 +186,10 @@ Perl's Getopt::Long consumes `--` and leaves the remaining arguments in `@ARGV`,
 ## 13. Exit Codes on Fatal Errors
 
 Perl's `die` exits with `$!` — the errno left over from the *last failed syscall*, which is accidental: `stow a/b` ("Slashes are not permitted...") exits 2 if no `.stowrc` exists (ENOENT from probing it) but 255 if one does. We use intentional, stable exit codes instead (nonzero on error, documented per message). Scripts should test for nonzero rather than specific values.
+
+## 14. Refolding Ignores Perl's `foldable('')` Bug
+
+When unstowing makes a directory foldable, Perl's `foldable()` initializes its tracking variable to the empty string, and a foreign symlink whose destination has no slash (e.g. `a -> b`) is mistaken for "no parent seen yet". As a result Perl can fold the directory and **delete a user's unrelated symlink**. We treat such a directory as not foldable, preserving the user's link. This is a deliberate safety divergence from a data-loss bug.
 
 ## 15. chkstow Follows a Symlinked Target
 
