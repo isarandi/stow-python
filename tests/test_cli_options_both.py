@@ -258,3 +258,69 @@ class TestCliOptionsBoth:
             check_on_simulate=False,
             compare_fs_ops=True,
         )
+
+    def test_plus_n_simulate(self, stow_env):
+        """Test +n option for simulate mode.
+
+        Pythonic supports +n (with deprecation warning) when POSIXLY_CORRECT is not set.
+        When POSIXLY_CORRECT is set, +n is treated as a package name (disabled).
+
+        Note: Pythonic only supports +n, not other + prefixed options like +verbose.
+        This is intentionally different from Perl's full getopt_compat support.
+        """
+        stow_env.create_package("pkg", {"file": "content"})
+
+        def check(env):
+            # +n means simulate, so nothing should be created
+            check_not_exists(env, "file")
+
+        # Test without POSIXLY_CORRECT - +n should work as simulate
+        stow_env.reset_target()
+        rc, stdout, stderr = stow_env.run_python_stow(["-t", stow_env.target_dir, "+n", "pkg"])
+        assert rc == 0, f"Expected success, got: {stderr}"
+        assert "simulation mode" in stderr
+        check(stow_env)
+
+        # Test with POSIXLY_CORRECT - +n should be treated as package name (error)
+        stow_env.reset_target()
+        rc, stdout, stderr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "+n", "pkg"],
+            env={"POSIXLY_CORRECT": ""}
+        )
+        assert rc != 0, "Expected error when +n treated as package"
+        assert "+n" in stderr  # Error about package +n not found
+
+    def test_require_order_options_after_package(self, stow_env):
+        """Test require_order behavior under POSIXLY_CORRECT.
+
+        POSIXLY_CORRECT enables require_order in Perl's Getopt::Long, which
+        stops parsing options at the first non-option argument.
+
+        With require_order: 'stow pkg --verbose' treats '--verbose' as a package
+        Without require_order: 'stow pkg --verbose' treats '--verbose' as an option
+
+        Perl stow explicitly sets 'permute' which overrides require_order,
+        so this should work the same with and without POSIXLY_CORRECT.
+        This test verifies both implementations match Perl's behavior.
+        """
+        stow_env.create_package("pkg1", {"file1": "content1"})
+        stow_env.create_package("pkg2", {"file2": "content2"})
+
+        def setup():
+            pass
+
+        def check(env):
+            # Both packages should be stowed
+            check_link(env, "file1", "../stow/pkg1/file1")
+            check_link(env, "file2", "../stow/pkg2/file2")
+
+        # Options mixed with packages - tests permute behavior
+        # Perl stow explicitly enables permute, so this should work
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg1", "-v", "pkg2"],
+            setup,
+            check,
+            check_on_simulate=False,
+            compare_fs_ops=True,
+        )

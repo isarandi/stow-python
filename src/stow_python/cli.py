@@ -179,6 +179,9 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
     pkgs_to_stow: list[str] = []
     action = "stow"
 
+    # POSIXLY_CORRECT disables + prefix for options in Perl's Getopt::Long
+    posixly_correct = "POSIXLY_CORRECT" in os.environ
+
     i = 0
     while i < len(args):
         arg = args[i]
@@ -260,11 +263,13 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
             show_version_and_exit()
 
         # Support +n for simulate (backwards compat with Perl's Getopt::Long)
-        elif arg == "+n":
+        # POSIXLY_CORRECT disables + prefix support
+        elif arg == "+n" and not posixly_correct:
             print("Warning: +n is deprecated, use -n instead", file=sys.stderr)
             options["simulate"] = True
 
         # Package argument (including "-" which is a valid package name)
+        # Also matches +n when POSIXLY_CORRECT (+ not recognized as option prefix)
         elif not arg.startswith("-") or arg == "-":
             if action == "restow":
                 pkgs_to_unstow.append(arg)
