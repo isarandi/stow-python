@@ -290,6 +290,50 @@ def parent(*path_parts):
     return '/'.join(elts)
 
 
+def move_like_perl(src, dst):
+    """
+    Move a file from src to dst like Perl's File::Copy::move.
+
+    Matches Perl's syscall pattern: a -d check on the destination, then
+    pre-stats of destination and source (used for NFS robustness: when
+    rename() fails because the NFS server's ACK was lost, the rename may
+    still have succeeded, detectable by the source being gone and the
+    destination having the expected size). Falls back to copy+delete for
+    cross-filesystem moves.
+    """
+    # Moving into a directory (also produces Perl's -d stat syscall)
+    if os.path.isdir(dst) and not os.path.isdir(src):
+        dst = os.path.join(dst, os.path.basename(src))
+
+    # Pre-stat both files (like File::Copy::move)
+    try:
+        os.stat(dst)
+    except OSError:
+        pass
+    try:
+        src_size = os.stat(src).st_size
+    except OSError:
+        src_size = None
+
+    try:
+        os.rename(src, dst)
+        return
+    except OSError:
+        pass
+
+    # NFS workaround: the rename may have succeeded despite the error
+    if src_size is not None and not os.path.exists(src):
+        try:
+            if os.stat(dst).st_size == src_size:
+                return
+        except OSError:
+            pass
+
+    # Cross-filesystem fallback
+    shutil.copy2(src, dst)
+    os.unlink(src)
+
+
 def canon_path(path):
     """
     Find absolute canonical path of given path.
@@ -1679,10 +1723,11 @@ _darcs
 
         elif task['action'] == 'move':
             if task['type'] == 'file':
-                # shutil.move() not good enough, since the stow directory
-                # might be on a different filesystem to the target.
+                # Perl uses File::Copy::move here; move_like_perl mirrors
+                # its syscall pattern (pre-stats for NFS robustness) and
+                # its copy+delete fallback for cross-filesystem moves.
                 try:
-                    shutil.move(task['path'], task['dest'])
+                    move_like_perl(task['path'], task['dest'])
                 except (IOError, OSError) as e:
                     error("Could not move %s -> %s (%s)", task['path'], task['dest'], e)
                 return
