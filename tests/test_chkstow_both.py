@@ -28,7 +28,7 @@ Perl t/chkstow.t tests (7 scenarios):
 7. Default target is /usr/local
 
 These tests verify Perl vs Python match and check expected output patterns.
-Syscall comparison tests verify identical File::Find traversal behavior.
+Note: chkstow is read-only with no simulate mode, so we don't use run_both_tests.
 """
 
 import os
@@ -126,7 +126,7 @@ class TestChkstowBoth:
         assert re.search(r"emacs\nperl\nstow\n", stdout), f"Expected package list, got: {stdout}"
 
     def test_no_bogus_links(self, chkstow_env):
-        r"""Bad links check with no bad links.
+        """Bad links check with no bad links.
 
         Perl: stdout_like qr{\A\z} (empty)
         """
@@ -135,7 +135,7 @@ class TestChkstowBoth:
         assert stdout.strip() == "", f"Expected empty stdout, got: {stdout}"
 
     def test_no_aliens(self, chkstow_env):
-        r"""Aliens check with no aliens.
+        """Aliens check with no aliens.
 
         Perl: stdout_like qr{\A\z} (empty)
         """
@@ -175,14 +175,7 @@ class TestChkstowBoth:
 
 
 class TestChkstowSyscalls:
-    """Oracle tests comparing syscall traces between Perl and Python chkstow.
-
-    Verifies that the Python implementation uses the same File::Find-like
-    traversal pattern as Perl, including:
-    - chdir-based directory walking
-    - Same lstat/stat patterns
-    - Same order of operations
-    """
+    """Oracle tests comparing syscall traces between Perl and Python chkstow."""
 
     def test_list_packages_syscalls(self, chkstow_env):
         """List packages mode should produce identical syscalls."""
