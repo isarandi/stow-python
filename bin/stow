@@ -41,10 +41,10 @@ DESCRIPTION:
 from __future__ import print_function
 
 import errno as errno_module
+import io
 import os
 import pwd
 import re
-import shlex
 import shutil
 import stat
 import sys
@@ -2289,6 +2289,307 @@ def process_options():
     return (options, pkgs_to_unstow, pkgs_to_stow)
 
 
+# The alternation mirrors the parse_line() pattern in Text::ParseWords 3.31:
+# a double-quoted segment, a single-quoted segment, or an unquoted segment
+# followed by a delimiter (end of string, whitespace, or a quote starting the
+# next segment). Perl uses atomic groups (?>...) purely as a stack guard;
+# the match language is identical without them.
+PARSE_LINE_RE = re.compile(
+    r'(")([^\\"]*(?:\\.[^\\"]*)*)"'
+    r"|(')([^\\']*(?:\\.[^\\']*)*)'"
+    r'|((?:\\.|[^\\"\'])*?)(\Z|\s+|(?!^)(?=["\']))',
+    re.S,
+)
+
+
+def perl_shellwords(line):
+    """
+    Parse a line using Perl's Text::ParseWords::shellwords() semantics,
+    i.e. parse_line('\\s+', 0, $line) after stripping leading whitespace.
+
+    Faithful port of Text::ParseWords 3.31 (see the bug4bug branch for the
+    fuzz-verified original): backslash escapes any character inside double
+    quotes, stays literal inside single quotes (but still spans two
+    characters while scanning), empty quoted words are kept, and a line
+    that fails to parse (unmatched quote, trailing lone backslash) yields
+    no words at all.
+    """
+    line = re.sub(r'^\s+', '', line)
+    pieces = []
+    word = None
+
+    while line:
+        m = PARSE_LINE_RE.match(line)
+        if m is None:
+            # Unmatched quote or trailing backslash: parse_line returns ()
+            return []
+        dq, dq_text, sq, sq_text, unquoted, delim = m.groups()
+        quote = dq if dq is not None else sq
+
+        if quote is None and not unquoted and not delim:
+            return []
+
+        if quote is not None:
+            quoted = dq_text if dq is not None else sq_text
+            if quote == '"':
+                quoted = re.sub(r'\\(.)', r'\1', quoted, flags=re.S)
+            segment = quoted
+        else:
+            segment = re.sub(r'\\(.)', r'\1', unquoted, flags=re.S)
+
+        word = ('' if word is None else word) + segment
+        line = line[m.end():]
+
+        if delim:
+            pieces.append(word)
+            word = None
+        if not line:
+            pieces.append(word)
+
+    # shellwords() pops a trailing undef left by a line ending in whitespace
+    if pieces and pieces[-1] is None:
+        pieces.pop()
+    return [w for w in pieces if w is not None]
+
+
+def is_readable_by_effective_uid(st):
+    """Perl's -r test: readability from stat mode bits and effective IDs."""
+    mode = st.st_mode
+    euid = os.geteuid()
+    egid = os.getegid()
+    if euid == 0:
+        return True
+    if st.st_uid == euid:
+        return bool(mode & stat.S_IRUSR)
+    if st.st_gid == egid or st.st_gid in os.getgroups():
+        return bool(mode & stat.S_IRGRP)
+    return bool(mode & stat.S_IROTH)
+
+
+# Getopt::Long option specification, in bin/stow's GetOptions() order.
+# Each entry: (names with the primary name first, value type).
+# Value types: 'flag', 'optint' ('verbose|v:+'), 'string' ('=s').
+OPTION_SPECS = [
+    (('verbose', 'v'), 'optint'),
+    (('help', 'h'), 'flag'),
+    (('simulate', 'n', 'no'), 'flag'),
+    (('version', 'V'), 'flag'),
+    (('compat', 'p'), 'flag'),
+    (('dir', 'd'), 'string'),
+    (('target', 't'), 'string'),
+    (('adopt',), 'flag'),
+    (('no-folding',), 'flag'),
+    (('dotfiles',), 'flag'),
+    (('ignore',), 'string'),
+    (('override',), 'string'),
+    (('defer',), 'string'),
+    (('D', 'delete'), 'flag'),
+    (('S', 'stow'), 'flag'),
+    (('R', 'restow'), 'flag'),
+]
+
+# Getopt::Long's optional-integer test for 'verbose|v:+' values. Perl anchors
+# with $, which also matches before one trailing newline, so "2\n" counts.
+OPTIONAL_INT_RE = re.compile(r'[+-]?[0-9]+\n?\Z')
+
+
+def getopt_error(msg):
+    """Print a bare Getopt::Long-style error, then usage, exit 1."""
+    sys.stderr.write(msg + "\n")
+    usage(exit_code=1)
+
+
+def find_long_option(name, allow_abbrev):
+    """
+    Resolve a long option name like Getopt::Long's find_option.
+
+    An exact name/alias match wins; otherwise a unique prefix resolves via
+    auto_abbrev (which POSIXLY_CORRECT disables, hence allow_abbrev). A
+    prefix matching several options is a fatal ambiguity error. Returns
+    (matched_name, primary_name, value_type) - matched_name is the name as
+    resolved (alias as given, or the full name a prefix expanded to), which
+    is what Getopt::Long uses in error messages - or None if unknown.
+    """
+    for names, vtype in OPTION_SPECS:
+        if name in names:
+            return (name, names[0], vtype)
+    if not allow_abbrev or not name:
+        return None
+    hits = []
+    for names, vtype in OPTION_SPECS:
+        matched = [nm for nm in names if nm.startswith(name)]
+        if matched:
+            hits.append((matched, names[0], vtype))
+    if not hits:
+        return None
+    if len(hits) > 1:
+        all_matched = []
+        for matched, _primary, _vtype in hits:
+            all_matched.extend(matched)
+        getopt_error(
+            "Option %s is ambiguous (%s)" % (name, ', '.join(sorted(all_matched)))
+        )
+    matched, primary, vtype = hits[0]
+    return (matched[0], primary, vtype)
+
+
+def apply_long_option(given_name, primary, vtype, attached, args, i, options, action):
+    """
+    Apply one resolved long/+ option, consuming a following argument as its
+    value where Getopt::Long would. Returns the updated (i, action).
+    """
+    if vtype == 'string':
+        # Getopt::Long rejects an EMPTY attached value ("--dir=") as a
+        # missing argument, though an empty separate argument is accepted
+        if attached:
+            value = attached
+        elif attached is None and i + 1 < len(args):
+            i += 1
+            value = args[i]
+        else:
+            getopt_error("Option %s requires an argument" % given_name)
+        if primary == 'dir':
+            options['dir'] = value
+        elif primary == 'target':
+            options['target'] = value
+        elif primary == 'ignore':
+            options.setdefault('ignore', []).append(re.compile('(%s)\\Z' % value))
+        elif primary == 'override':
+            options.setdefault('override', []).append(re.compile('\\A(%s)' % value))
+        elif primary == 'defer':
+            options.setdefault('defer', []).append(re.compile('\\A(%s)' % value))
+    elif vtype == 'optint':
+        # 'verbose|v:+': an attached or following integer sets the level,
+        # an empty attached value or anything else increments
+        if attached is not None:
+            if attached == '':
+                options['verbose'] = options.get('verbose', 0) + 1
+            elif OPTIONAL_INT_RE.match(attached):
+                options['verbose'] = int(attached)
+            else:
+                getopt_error(
+                    'Value "%s" invalid for option verbose (number expected)'
+                    % attached
+                )
+        elif i + 1 < len(args) and OPTIONAL_INT_RE.match(args[i + 1]):
+            i += 1
+            options['verbose'] = int(args[i])
+        else:
+            options['verbose'] = options.get('verbose', 0) + 1
+    else:
+        if attached is not None:
+            getopt_error("Option %s does not take an argument" % given_name)
+        if primary == 'simulate':
+            options['simulate'] = True
+        elif primary == 'compat':
+            options['compat'] = True
+        elif primary == 'adopt':
+            options['adopt'] = True
+        elif primary == 'no-folding':
+            options['no-folding'] = True
+        elif primary == 'dotfiles':
+            options['dotfiles'] = True
+        elif primary == 'D':
+            action = 'unstow'
+        elif primary == 'S':
+            action = 'stow'
+        elif primary == 'R':
+            action = 'restow'
+        elif primary == 'help':
+            usage()
+        elif primary == 'version':
+            version()
+    return (i, action)
+
+
+def write_raw_stderr(data):
+    """Write raw bytes to stderr (Python 2/3 compatible)."""
+    if hasattr(sys.stderr, 'buffer'):
+        sys.stderr.buffer.write(data)
+        sys.stderr.buffer.flush()
+    else:
+        sys.stderr.write(data)
+        sys.stderr.flush()
+
+
+def parse_bundled_options(args, arg_index, options, action):
+    """
+    Parse bundled short options like -npvS at args[arg_index].
+
+    Perl's Getopt::Long iterates byte-by-byte, not character-by-character,
+    so multi-byte characters are reported one byte at a time. A value
+    option (d, t) at the END of a bundle consumes the next command-line
+    argument (-nd DIR), and a bare trailing v consumes a following integer
+    argument (-nv 4), matching 'verbose|v:+'.
+
+    Returns (action, next_arg_index, has_any_unknown_options,
+    should_show_help, should_show_version).
+    """
+    has_any_unknown_options = False
+    should_show_help = False
+    should_show_version = False
+
+    chars = args[arg_index][1:]
+    if str is bytes:
+        char_bytes = chars  # Python 2: str is already bytes
+    else:
+        char_bytes = chars.encode('utf-8', 'surrogateescape')
+    i = 0
+
+    while i < len(char_bytes):
+        byte = char_bytes[i:i + 1]
+        rest_bytes = char_bytes[i + 1:]
+        if str is bytes:
+            rest = rest_bytes
+        else:
+            rest = rest_bytes.decode('utf-8', 'surrogateescape')
+
+        if byte == b'n':
+            options['simulate'] = True
+        elif byte == b'p':
+            options['compat'] = True
+        elif byte == b'v':
+            m = re.match(r'\d+', rest)
+            if m:
+                options['verbose'] = int(m.group())
+                i += len(m.group().encode('utf-8')) if str is not bytes else len(m.group())
+            elif not rest and arg_index + 1 < len(args) \
+                    and OPTIONAL_INT_RE.match(args[arg_index + 1]):
+                arg_index += 1
+                options['verbose'] = int(args[arg_index])
+            else:
+                options['verbose'] = options.get('verbose', 0) + 1
+        elif byte == b'S':
+            action = 'stow'
+        elif byte == b'D':
+            action = 'unstow'
+        elif byte == b'R':
+            action = 'restow'
+        elif byte == b'h':
+            should_show_help = True
+        elif byte == b'V':
+            should_show_version = True
+        elif byte in (b'd', b't') and rest:
+            options['dir' if byte == b'd' else 'target'] = rest
+            i += len(rest_bytes)
+        elif byte in (b'd', b't'):
+            # Last byte of the bundle: the value is the next argument
+            if arg_index + 1 < len(args):
+                arg_index += 1
+                options['dir' if byte == b'd' else 'target'] = args[arg_index]
+            else:
+                getopt_error("Option %s requires an argument" % byte.decode('ascii'))
+        else:
+            # Report the raw byte like Perl, and keep going: Perl prints
+            # one line per unknown byte in the bundle
+            write_raw_stderr(b'Unknown option: ' + byte + b'\n')
+            has_any_unknown_options = True
+        i += 1
+
+    return (action, arg_index, has_any_unknown_options,
+            should_show_help, should_show_version)
+
+
 def parse_options(args):
     """
     Parse command line options.
@@ -2300,100 +2601,64 @@ def parse_options(args):
     pkgs_to_stow = []
     action = 'stow'
 
+    # POSIXLY_CORRECT changes Getopt::Long behavior: it disables the +
+    # prefix (getopt_compat) and long-option abbreviation (auto_abbrev).
+    # It would also enable require_order, BUT Perl stow explicitly sets
+    # config('permute') which overrides that.
+    posixly_correct = 'POSIXLY_CORRECT' in os.environ
+
     i = 0
     while i < len(args):
         arg = args[i]
 
-        # Handle options with values
-        if arg in ('-d', '--dir') and i + 1 < len(args):
-            i += 1
-            options['dir'] = args[i]
-        elif arg.startswith('--dir='):
-            options['dir'] = arg[6:]
-        elif arg.startswith('-d') and len(arg) > 2:
-            options['dir'] = arg[2:]
+        # Getopt::Long: "--" ends option processing and leaves the
+        # remaining arguments in @ARGV, which Perl stow never looks at
+        # again - so everything after "--" is silently DISCARDED, not
+        # treated as packages.
+        if arg == '--':
+            break
 
-        elif arg in ('-t', '--target') and i + 1 < len(args):
-            i += 1
-            options['target'] = args[i]
-        elif arg.startswith('--target='):
-            options['target'] = arg[9:]
-        elif arg.startswith('-t') and len(arg) > 2:
-            options['target'] = arg[2:]
+        elif arg.startswith('--'):
+            name = arg[2:]
+            attached = None
+            # Getopt::Long only splits at "=" when at least one name
+            # character precedes it ("--=x" is the unknown option "=x")
+            if '=' in name and not name.startswith('='):
+                name, attached = name.split('=', 1)
+            resolved = find_long_option(name, not posixly_correct)
+            if resolved is None:
+                getopt_error("Unknown option: %s" % name)
+            given_name, primary, vtype = resolved
+            i, action = apply_long_option(
+                given_name, primary, vtype, attached, args, i, options, action)
 
-        elif arg == '--ignore' and i + 1 < len(args):
-            i += 1
-            regex = args[i]
-            if 'ignore' not in options:
-                options['ignore'] = []
-            options['ignore'].append(re.compile('(%s)\\Z' % regex))
-        elif arg.startswith('--ignore='):
-            regex = arg[9:]
-            if 'ignore' not in options:
-                options['ignore'] = []
-            options['ignore'].append(re.compile('(%s)\\Z' % regex))
+        # Support + prefix (Perl's Getopt::Long getopt_compat mode).
+        # Same name resolution as --, but "=" values are NOT recognized:
+        # "+target=x" fails to resolve and reports its first byte.
+        # POSIXLY_CORRECT disables + prefix support entirely.
+        elif arg.startswith('+') and not posixly_correct:
+            if arg == '+':
+                getopt_error("Missing option after +")
+            opt = arg[1:]
+            resolved = find_long_option(opt, True)
+            if resolved is None:
+                # Unknown + option: report first BYTE only (Perl behavior)
+                if str is bytes:
+                    first_byte = opt[0:1]
+                else:
+                    first_byte = opt.encode('utf-8', 'surrogateescape')[0:1]
+                write_raw_stderr(b'Unknown option: ' + first_byte + b'\n')
+                usage(exit_code=1)
+            given_name, primary, vtype = resolved
+            i, action = apply_long_option(
+                given_name, primary, vtype, None, args, i, options, action)
 
-        elif arg == '--override' and i + 1 < len(args):
-            i += 1
-            regex = args[i]
-            if 'override' not in options:
-                options['override'] = []
-            options['override'].append(re.compile('\\A(%s)' % regex))
-        elif arg.startswith('--override='):
-            regex = arg[11:]
-            if 'override' not in options:
-                options['override'] = []
-            options['override'].append(re.compile('\\A(%s)' % regex))
-
-        elif arg == '--defer' and i + 1 < len(args):
-            i += 1
-            regex = args[i]
-            if 'defer' not in options:
-                options['defer'] = []
-            options['defer'].append(re.compile('\\A(%s)' % regex))
-        elif arg.startswith('--defer='):
-            regex = arg[8:]
-            if 'defer' not in options:
-                options['defer'] = []
-            options['defer'].append(re.compile('\\A(%s)' % regex))
-
-        # Verbose option with optional value
-        elif arg in ('-v', '--verbose'):
-            options['verbose'] = options.get('verbose', 0) + 1
-        elif arg.startswith('--verbose='):
-            try:
-                options['verbose'] = int(arg[10:])
-            except ValueError:
-                options['verbose'] = 1
-
-        # Boolean flags
-        elif arg in ('-n', '--no', '--simulate'):
-            options['simulate'] = 1
-        elif arg in ('-p', '--compat'):
-            options['compat'] = 1
-        elif arg == '--adopt':
-            options['adopt'] = 1
-        elif arg == '--no-folding':
-            options['no-folding'] = 1
-        elif arg == '--dotfiles':
-            options['dotfiles'] = 1
-
-        # Action flags
-        elif arg in ('-D', '--delete'):
-            action = 'unstow'
-        elif arg in ('-S', '--stow'):
-            action = 'stow'
-        elif arg in ('-R', '--restow'):
-            action = 'restow'
-
-        # Help and version
-        elif arg in ('-h', '--help'):
-            usage()
-        elif arg in ('-V', '--version'):
-            version()
-
-        # Package argument
-        elif not arg.startswith('-'):
+        # Package argument (including "-" which is a valid package name).
+        # Also matches +foo when POSIXLY_CORRECT (+ not an option prefix).
+        elif not arg.startswith('-') or arg == '-':
+            # Perl stow explicitly sets config('permute') which overrides
+            # POSIXLY_CORRECT's require_order default, so options may still
+            # follow package arguments.
             if action == 'restow':
                 pkgs_to_unstow.append(arg)
                 pkgs_to_stow.append(arg)
@@ -2403,11 +2668,16 @@ def parse_options(args):
                 pkgs_to_stow.append(arg)
 
         else:
-            # Strip leading dashes for the error message (match Perl's Getopt::Long)
-            opt_name = arg.lstrip('-')
-            # Print error without stow: prefix (Getopt::Long format)
-            sys.stderr.write("Unknown option: %s\n" % opt_name)
-            usage(exit_code=1)
+            # Bundled short options: -xyz is parsed as -x -y -z
+            (action, i, has_any_unknown_options,
+             should_show_help, should_show_version) = parse_bundled_options(
+                args, i, options, action)
+            if has_any_unknown_options:
+                usage(exit_code=1)
+            if should_show_help:
+                usage()
+            if should_show_version:
+                version()
 
         i += 1
 
@@ -2453,6 +2723,7 @@ def get_config_file_options():
 
     Returns: (rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow)
     """
+    global _last_errno
     defaults = []
     dirlist = ['.stowrc']
 
@@ -2461,21 +2732,26 @@ def get_config_file_options():
         dirlist.insert(0, os.path.join(home, '.stowrc'))
 
     for file_path in dirlist:
-        if os.path.isfile(file_path) and os.access(file_path, os.R_OK):
-            try:
-                with open(file_path, 'r') as f:
-                    for line in f:
-                        line = line.rstrip('\n\r')
-                        # Use shlex to parse shell-like syntax
-                        try:
-                            words = shlex.split(line)
-                            defaults.extend(words)
-                        except ValueError:
-                            # Handle quoted strings that span lines, etc.
-                            defaults.extend(line.split())
-            except IOError:
-                sys.stderr.write("Could not open %s for reading\n" % file_path)
-                sys.exit(1)
+        # Perl's -r test is a single stat; a failed stat leaves errno set,
+        # which a later die() picks up as the exit code (via _last_errno)
+        try:
+            st = os.stat(file_path)
+        except OSError as e:
+            _last_errno = e.errno
+            continue
+        if not stat.S_ISREG(st.st_mode) or not is_readable_by_effective_uid(st):
+            continue
+        try:
+            # newline='\n' splits lines exactly like Perl's <$FILE> (on
+            # newline only, no CR translation); the strip matches chomp
+            with io.open(file_path, 'r', newline='\n') as f:
+                for line in f:
+                    if line.endswith('\n'):
+                        line = line[:-1]
+                    defaults.extend(perl_shellwords(line))
+        except IOError:
+            sys.stderr.write("Could not open %s for reading\n" % file_path)
+            sys.exit(1)
 
     # Parse the options
     rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow = parse_options(defaults)
