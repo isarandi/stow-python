@@ -1716,6 +1716,12 @@ _darcs
                 return
             elif task['type'] == 'link':
                 try:
+                    # Perl's unlink builtin lstats first (it refuses to
+                    # unlink a directory), so match that syscall
+                    st = os.lstat(task['path'])
+                    if stat.S_ISDIR(st.st_mode):
+                        raise OSError(errno_module.EISDIR, "Is a directory",
+                                      task['path'])
                     os.unlink(task['path'])
                 except OSError as e:
                     error("Could not remove link: %s (%s)", task['path'], e)
