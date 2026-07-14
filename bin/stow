@@ -1861,7 +1861,9 @@ _darcs
         if self.parent_link_scheduled_for_removal(target_path):
             return False
 
-        if os.path.exists(target_path) or os.path.islink(target_path):
+        # Perl does a plain -e here (one stat, false for a broken symlink);
+        # callers handle links via is_a_link() beforehand
+        if os.path.exists(target_path):
             debug(4, 3, "| is_a_node(%s): really exists" % target_path)
             return True
 
