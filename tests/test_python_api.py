@@ -28,7 +28,7 @@ import re
 import pytest
 
 from stow_python import stow, unstow, restow, StowConfig, StowResult, StowError
-from stow_python.types import LinkTask, DirTask, MoveTask, Action
+from stow_python.types import LinkTask, DirTask, MoveTask
 
 
 @pytest.fixture

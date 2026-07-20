@@ -51,7 +51,7 @@ def chkstow_env(stow_env):
     # Create stow directory marker
     stow_env.create_target_dir("stow")
     stow_marker = os.path.join(stow_env.target_dir, "stow", ".stow")
-    with open(stow_marker, "w") as f:
+    with open(stow_marker, "w"):
         pass
 
     # Create perl package
@@ -126,7 +126,7 @@ class TestChkstowBoth:
         assert re.search(r"emacs\nperl\nstow\n", stdout), f"Expected package list, got: {stdout}"
 
     def test_no_bogus_links(self, chkstow_env):
-        """Bad links check with no bad links.
+        r"""Bad links check with no bad links.
 
         Perl: stdout_like qr{\A\z} (empty)
         """
@@ -135,7 +135,7 @@ class TestChkstowBoth:
         assert stdout.strip() == "", f"Expected empty stdout, got: {stdout}"
 
     def test_no_aliens(self, chkstow_env):
-        """Aliens check with no aliens.
+        r"""Aliens check with no aliens.
 
         Perl: stdout_like qr{\A\z} (empty)
         """

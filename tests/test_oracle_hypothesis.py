@@ -302,11 +302,12 @@ class TestStowHypothesis:
 
             pkg_names = list(packages.keys())
 
-            # First stow
-            env.run_perl_stow(["-t", env.target_dir] + pkg_names)
+            def setup():
+                # First stow
+                env.run_perl_stow(["-t", env.target_dir] + pkg_names)
 
             # Then test restow
-            assert_stow_match(env, ["-t", env.target_dir, "-R"] + pkg_names)
+            assert_stow_match(env, ["-t", env.target_dir, "-R"] + pkg_names, setup)
 
     @settings(max_examples=30, **ORACLE_SETTINGS)
     @given(files=file_tree_st(max_depth=3, max_files=8))
@@ -330,11 +331,12 @@ class TestStowHypothesis:
             env.create_package("pkg1", pkg1_files)
             env.create_package("pkg2", pkg2_files)
 
-            # Stow first package
-            env.run_perl_stow(["-t", env.target_dir, "pkg1"])
+            def setup():
+                # Stow first package
+                env.run_perl_stow(["-t", env.target_dir, "pkg1"])
 
             # Stow second - may trigger unfolding
-            assert_stow_match(env, ["-t", env.target_dir, "pkg2"])
+            assert_stow_match(env, ["-t", env.target_dir, "pkg2"], setup)
 
 
 class TestStowDotfilesHypothesis:
@@ -358,11 +360,14 @@ class TestStowDotfilesHypothesis:
             env = StowTestEnv(tmpdir)
             env.create_package("dotpkg", files)
 
-            # First stow
-            env.run_perl_stow(["-t", env.target_dir, "--dotfiles", "dotpkg"])
+            def setup():
+                # First stow
+                env.run_perl_stow(["-t", env.target_dir, "--dotfiles", "dotpkg"])
 
             # Then unstow
-            assert_stow_match(env, ["-t", env.target_dir, "--dotfiles", "-D", "dotpkg"])
+            assert_stow_match(
+                env, ["-t", env.target_dir, "--dotfiles", "-D", "dotpkg"], setup
+            )
 
 
 class TestStowConflictsHypothesis:

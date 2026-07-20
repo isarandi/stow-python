@@ -129,7 +129,7 @@ class TestRcOptionsBoth:
         # Create ~/.stowrc with wrong target
         with open(os.path.join(stow_env.tmpdir, ".stowrc"), "w") as f:
             f.write(f"-d {stow_env.stow_dir}\n")
-            f.write(f"--target=/nonexistent/should/be/overridden\n")
+            f.write("--target=/nonexistent/should/be/overridden\n")
 
         # Create .stowrc in stow_dir (cwd) with correct target
         with open(os.path.join(stow_env.stow_dir, ".stowrc"), "w") as f:

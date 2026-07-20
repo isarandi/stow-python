@@ -676,7 +676,7 @@ def _run_both_tests_impl(env, args, setup_func, check_func, check_on_simulate,
         assert_stow_match(env, args_execute, setup_func, env=extra_env)
 
 
-def is_stow_relevant_path(path):
+def is_stow_relevant_path(path, tmpdir=None):
     """Check if path is relevant to stow operations (not interpreter/system loading)."""
     # Filter out Python interpreter paths (site-packages, pycache, etc.)
     if '.local/lib/python' in path or '__pycache__' in path:
@@ -684,7 +684,12 @@ def is_stow_relevant_path(path):
     # Relative paths are stow operations (../stow/pkg, bin1, etc.)
     if not path.startswith('/'):
         return True
-    # Paths under /tmp are test directories
+    # Paths under the test directory are relevant; checking the actual
+    # tmpdir (not just /tmp) keeps this working when TMPDIR points
+    # elsewhere, which would otherwise silently filter out every test
+    # path and make the syscall comparison vacuous
+    if tmpdir and path.startswith(tmpdir):
+        return True
     if path.startswith('/tmp'):
         return True
     # User's stow config files
@@ -773,84 +778,94 @@ def parse_strace_output(strace_file, tmpdir=None, filter_relevant=True):
         tmpdir: if provided, make paths relative to this for comparison
         filter_relevant: if True, keep only stow-relevant paths
     """
-    two_path_syscalls = {'symlink', 'rename', 'link', 'linkat'}
     ops = []
+    saw_execve = False
 
-    try:
-        with open(strace_file, 'r') as f:
-            for line in f:
-                # Skip lines without syscall pattern
-                paren_pos = line.find('(')
-                if paren_pos == -1:
+    # A missing or unreadable strace file must fail loudly, not yield an
+    # empty op list that would compare equal to another empty op list
+    with open(strace_file, 'r') as f:
+        for line in f:
+            # Skip lines without syscall pattern
+            paren_pos = line.find('(')
+            if paren_pos == -1:
+                continue
+
+            # Extract syscall name
+            before_paren = line[:paren_pos].strip()
+            if ' ' in before_paren:
+                syscall = before_paren.split()[-1]
+            else:
+                syscall = before_paren
+
+            if syscall == 'execve':
+                saw_execve = True
+
+            # Normalize equivalent syscalls (see docs/perl-differences.md)
+            syscall = _normalize_syscall(syscall, line)
+
+            # Extract all quoted strings (paths)
+            paths = []
+            pos = 0
+            while True:
+                quote_start = line.find('"', pos)
+                if quote_start == -1:
+                    break
+                quote_end = line.find('"', quote_start + 1)
+                if quote_end == -1:
+                    break
+                path = line[quote_start + 1:quote_end]
+                paths.append(path)
+                pos = quote_end + 1
+
+            if not paths:
+                continue
+
+            # Filter by path relevance (check first path only - that's the operation target)
+            if filter_relevant:
+                if not is_stow_relevant_path(paths[0], tmpdir):
                     continue
 
-                # Extract syscall name
-                before_paren = line[:paren_pos].strip()
-                if ' ' in before_paren:
-                    syscall = before_paren.split()[-1]
-                else:
-                    syscall = before_paren
+            # Make paths relative to tmpdir for comparison
+            if tmpdir:
+                paths = [
+                    p[len(tmpdir):].lstrip('/') if p.startswith(tmpdir) else p
+                    for p in paths
+                ]
 
-                # Normalize equivalent syscalls (see docs/perl-differences.md)
-                syscall = _normalize_syscall(syscall, line)
-
-                # Extract all quoted strings (paths)
-                paths = []
-                pos = 0
-                while True:
-                    quote_start = line.find('"', pos)
-                    if quote_start == -1:
-                        break
-                    quote_end = line.find('"', quote_start + 1)
-                    if quote_end == -1:
-                        break
-                    path = line[quote_start + 1:quote_end]
-                    paths.append(path)
-                    pos = quote_end + 1
-
-                if not paths:
-                    continue
-
-                # Filter by path relevance (check first path only - that's the operation target)
-                if filter_relevant:
-                    if not is_stow_relevant_path(paths[0]):
-                        continue
-
-                # Make paths relative to tmpdir for comparison
-                if tmpdir:
-                    paths = [
-                        p[len(tmpdir):].lstrip('/') if p.startswith(tmpdir) else p
-                        for p in paths
-                    ]
-
-                # Extract return value
-                eq_pos = line.rfind(' = ')
-                result = None
-                if eq_pos != -1:
-                    result_str = line[eq_pos + 3:].strip()
-                    # Parse result: could be int, -1 ERRNO, or other
-                    if result_str.startswith('-1'):
-                        # Error case: "-1 ENOENT (No such file or directory)"
-                        parts = result_str.split()
-                        if len(parts) >= 2:
-                            result = parts[1]  # e.g., "ENOENT"
-                        else:
-                            result = -1
+            # Extract return value
+            eq_pos = line.rfind(' = ')
+            result = None
+            if eq_pos != -1:
+                result_str = line[eq_pos + 3:].strip()
+                # Parse result: could be int, -1 ERRNO, or other
+                if result_str.startswith('-1'):
+                    # Error case: "-1 ENOENT (No such file or directory)"
+                    parts = result_str.split()
+                    if len(parts) >= 2:
+                        result = parts[1]  # e.g., "ENOENT"
                     else:
-                        # Success: try to parse as int
-                        try:
-                            result = int(result_str.split()[0])
-                        except (ValueError, IndexError):
-                            result = result_str
+                        result = -1
+                else:
+                    # Success: try to parse as int
+                    try:
+                        result = int(result_str.split()[0])
+                    except (ValueError, IndexError):
+                        result = result_str
 
-                ops.append({
-                    'syscall': syscall,
-                    'paths': tuple(paths),
-                    'result': result,
-                })
+            ops.append({
+                'syscall': syscall,
+                'paths': tuple(paths),
+                'result': result,
+            })
 
-    except Exception:
-        pass
+    # trace=%file always includes the initial execve, so its absence means
+    # the traced command never ran (e.g. ptrace restricted by yama/seccomp)
+    # and any comparison of these ops would pass vacuously
+    if not saw_execve:
+        pytest.fail(
+            f"strace output {strace_file} contains no execve: the traced "
+            "command never ran (is ptrace restricted in this environment?)"
+        )
 
     return ops
 

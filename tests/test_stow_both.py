@@ -27,7 +27,6 @@ Based on Perl t/stow.t
 import os
 
 from conftest import (
-    assert_stow_match,
     check_dir,
     check_link,
     check_not_exists,

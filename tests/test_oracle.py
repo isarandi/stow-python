@@ -118,11 +118,12 @@ class TestRestow:
             },
         )
 
-        # First stow it
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "mypkg"])
+        def setup():
+            # First stow it
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "mypkg"])
 
         # Then restow
-        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "-R", "mypkg"])
+        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "-R", "mypkg"], setup)
 
 
 class TestConflicts:
@@ -168,11 +169,12 @@ class TestConflicts:
             },
         )
 
-        # Stow first package
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1"])
+        def setup():
+            # Stow first package
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1"])
 
         # Try to stow second - should conflict
-        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "pkg2"])
+        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "pkg2"], setup)
 
 
 class TestAdopt:
@@ -230,12 +232,13 @@ class TestDotfiles:
             },
         )
 
-        # First stow with dotfiles
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "--dotfiles", "dotpkg"])
+        def setup():
+            # First stow with dotfiles
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "--dotfiles", "dotpkg"])
 
         # Then unstow
         assert_stow_match(
-            stow_env, ["-t", stow_env.target_dir, "--dotfiles", "-D", "dotpkg"]
+            stow_env, ["-t", stow_env.target_dir, "--dotfiles", "-D", "dotpkg"], setup
         )
 
 
@@ -290,11 +293,14 @@ class TestDeferOverride:
             },
         )
 
-        # Stow first package
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1"])
+        def setup():
+            # Stow first package
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1"])
 
         # Stow second with defer - should not conflict
-        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "--defer=bin", "pkg2"])
+        assert_stow_match(
+            stow_env, ["-t", stow_env.target_dir, "--defer=bin", "pkg2"], setup
+        )
 
     def test_override_pattern(self, stow_env):
         """Override should replace existing stowed link."""
@@ -311,12 +317,13 @@ class TestDeferOverride:
             },
         )
 
-        # Stow first package
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1"])
+        def setup():
+            # Stow first package
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1"])
 
         # Stow second with override
         assert_stow_match(
-            stow_env, ["-t", stow_env.target_dir, "--override=bin", "pkg2"]
+            stow_env, ["-t", stow_env.target_dir, "--override=bin", "pkg2"], setup
         )
 
 
@@ -546,8 +553,11 @@ class TestCompat:
             },
         )
 
-        # First stow
-        stow_env.run_perl_stow(["-t", stow_env.target_dir, "mypkg"])
+        def setup():
+            # First stow
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "mypkg"])
 
         # Unstow with compat
-        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "-p", "-D", "mypkg"])
+        assert_stow_match(
+            stow_env, ["-t", stow_env.target_dir, "-p", "-D", "mypkg"], setup
+        )
