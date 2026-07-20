@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -90,7 +90,7 @@ jobs:
         run: mypy src/stow_python/ --ignore-missing-imports
 
       - name: Lint with ruff
-        run: ruff check src/stow_python/
+        run: ruff check src/ tests/ scripts/
 
       - name: Check formatting with ruff
         run: ruff format --check src/stow_python/

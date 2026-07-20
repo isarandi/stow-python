@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v4
@@ -34,8 +34,15 @@ jobs:
         run: |
           ./tests/get_gnu_stow_for_testing_identical_behavior.sh
 
+      # The syscall-comparison layer skips without strace; CI must never
+      # run in that degraded mode, so fail hard if strace is missing.
+      - name: Ensure strace is available
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq strace
+          strace --version
+
       - name: Run tests
-        run: pytest tests/ -v --ignore=tests/test_oracle_hypothesis.py
+        run: pytest tests/ -v
 
   attach-binaries:
     needs: test

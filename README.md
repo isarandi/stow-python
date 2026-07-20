@@ -4,14 +4,14 @@ This is a pedantically faithful, single-file, dependency-free Python reimplement
 
 The reason for making this is to help transition the GNU Stow project from Perl to Python, providing a modern, maintainable codebase while preserving full compatibility with existing workflows.
 
-The goal here is identical behavior to GNU Stow, to achieve true, worry-free drop-in substitution. This is tested both with ports of the original Perl tests and with oracle tests against the Perl executable verifying identical output, return codes and filesystem state. The code follows modern Python idioms using dataclasses, enums, and pattern matching, while maintaining behavioral equivalence with GNU Stow verified through oracle testing. See [known differences](docs/perl-differences.md) for minor edge cases.
+The goal here is identical behavior to GNU Stow, to achieve true, worry-free drop-in substitution. This is tested both with ports of the original Perl tests and with oracle tests against the Perl executable verifying identical output, return codes and filesystem state. The code follows modern Python idioms using dataclasses and enums, while maintaining behavioral equivalence with GNU Stow verified through oracle testing. See [known differences](docs/perl-differences.md) for minor edge cases.
 
 ## Install
 
-Stow-Python has a single self-contained executable Python script `stow`, which you can simply drop directly into any directory in your PATH, such as `~/.local/bin`:
+Stow-Python has a single self-contained executable Python script `stow`, which you can simply drop directly into any directory in your PATH, such as `~/.local/bin`. The `stow` and `chkstow` scripts are attached to each [GitHub release](https://github.com/isarandi/stow-python/releases):
 
 ```bash
-wget -O ~/.local/bin/stow https://raw.githubusercontent.com/isarandi/stow-python/main/bin/stow
+wget -O ~/.local/bin/stow https://github.com/isarandi/stow-python/releases/latest/download/stow
 chmod +x ~/.local/bin/stow
 ```
 
@@ -64,7 +64,7 @@ This bundles all modules into standalone scripts with no dependencies beyond Pyt
 ## Run the tests
 
 ```bash
-pip install stow-python[tests]
+pip install stow-python[tests]  # installs pytest and hypothesis
 pytest tests/
 
 # For oracle tests (comparing against the Perl-based GNU Stow), install GNU Stow first:
