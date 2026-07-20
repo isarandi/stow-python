@@ -16,9 +16,9 @@ import pwd
 import re
 import sys
 import traceback
-from typing import Optional, Sequence
+from typing import NoReturn, Optional, Sequence
 
-from stow_python.stow import _Stower
+from stow_python.stow import _Stower, _compile_option_pattern
 from stow_python.types import StowError, StowInternalError, StowCLIError, StowConfig
 from stow_python.util import VERSION, PROGRAM_NAME, parent
 
@@ -223,9 +223,10 @@ def _parse_bundled_options(
             else:
                 show_usage_and_exit(f"Option {char} requires an argument")
         else:
+            # Like Perl, report every unknown letter and keep processing
+            # the rest of the bundle before the fatal usage exit
             print(f"Unknown option: {char}", file=sys.stderr)
-            # Perl stops after first unknown option in a bundle
-            return action, arg_index, True, should_show_help, should_show_version
+            has_any_unknown_options = True
         i += 1
 
     return (
@@ -256,23 +257,81 @@ def process_options() -> tuple[dict, list[str], list[str]]:
             options[option] = cli_value
 
     sanitize_path_options(options)
+
+    # Perl strips trailing slashes from package names (s{/+$}{} on the
+    # aliased loop variable), so "stow pkg/" behaves exactly like "stow pkg"
+    pkgs_to_unstow = [p.rstrip("/") for p in pkgs_to_unstow]
+    pkgs_to_stow = [p.rstrip("/") for p in pkgs_to_stow]
     check_packages(pkgs_to_stow, pkgs_to_unstow)
 
     return (options, pkgs_to_unstow, pkgs_to_stow)
 
 
-def _compile_option_regex(pattern: str, option: str) -> re.Pattern:
-    """Compile a user-supplied --ignore/--defer/--override regex.
+def _validate_option_regex(pattern: str, option: str) -> None:
+    """Reject a malformed --ignore/--defer/--override pattern up front.
 
-    A malformed pattern must produce a clean fatal error, not a traceback.
-    Note that Perl-only regex syntax (e.g. \\Q...\\E) is not supported and
-    also ends up here.
+    Anchoring and compilation happen in the core (_compile_option_pattern);
+    validating here turns a malformed pattern into a clean usage error, not
+    a traceback. Note that Perl-only regex syntax (e.g. \\Q...\\E) is not
+    supported and also ends up here.
     """
     try:
-        return re.compile(pattern)
-    except re.error as e:
-        show_usage_and_exit(f"Failed to compile regexp for --{option}: {e}")
-        raise AssertionError("unreachable")  # show_usage_and_exit exits
+        _compile_option_pattern(pattern, option)
+    except StowError as e:
+        show_usage_and_exit(e.message)
+
+
+# Option table mirroring Perl stow's GetOptions() specification. Long
+# options resolve by exact name (or alias) first, then by unique prefix
+# like Getopt::Long's auto_abbrev, which POSIXLY_CORRECT disables.
+# Value types: "flag" (no value), "optint" (optional attached integer,
+# like 'verbose|v:i'), "string" (mandatory value, like 'dir|d=s').
+_OPTION_SPECS = [
+    (("verbose", "v"), "optint"),
+    (("help", "h"), "flag"),
+    (("simulate", "n", "no"), "flag"),
+    (("version", "V"), "flag"),
+    (("compat", "p"), "flag"),
+    (("dir", "d"), "string"),
+    (("target", "t"), "string"),
+    (("adopt",), "flag"),
+    (("no-folding",), "flag"),
+    (("dotfiles",), "flag"),
+    (("ignore",), "string"),
+    (("override",), "string"),
+    (("defer",), "string"),
+    (("D", "delete"), "flag"),
+    (("S", "stow"), "flag"),
+    (("R", "restow"), "flag"),
+]
+
+
+def _find_long_option(name: str, allow_abbrev: bool) -> Optional[tuple[str, str, str]]:
+    """Resolve a long option name like Getopt::Long's find_option.
+
+    An exact name/alias match wins; otherwise a unique prefix resolves via
+    auto_abbrev. A prefix matching several options is a fatal ambiguity
+    error. Returns (matched_name, primary_name, value_type) — matched_name
+    is the name as resolved (alias as given, or the full name a prefix
+    expanded to), which is what error messages use — or None if unknown.
+    """
+    for names, vtype in _OPTION_SPECS:
+        if name in names:
+            return name, names[0], vtype
+    if not allow_abbrev or not name:
+        return None
+    hits = []
+    for names, vtype in _OPTION_SPECS:
+        matched = [nm for nm in names if nm.startswith(name)]
+        if matched:
+            hits.append((matched, names[0], vtype))
+    if not hits:
+        return None
+    if len(hits) > 1:
+        all_matched = sorted(nm for matched, _, _ in hits for nm in matched)
+        show_usage_and_exit(f"Option {name} is ambiguous ({', '.join(all_matched)})")
+    matched, primary, vtype = hits[0]
+    return matched[0], primary, vtype
 
 
 def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
@@ -285,10 +344,82 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
     pkgs_to_stow: list[str] = []
     action = "stow"
 
-    # POSIXLY_CORRECT disables + prefix for options in Perl's Getopt::Long
+    # POSIXLY_CORRECT disables the + option prefix and long-option
+    # abbreviation in Perl's Getopt::Long. It would also enable
+    # require_order, but Perl stow's explicit 'permute' config overrides
+    # that, so packages and options may be interleaved either way.
     posixly_correct = "POSIXLY_CORRECT" in os.environ
 
     i = 0
+
+    def add_package(pkg: str) -> None:
+        if action == "restow":
+            pkgs_to_unstow.append(pkg)
+            pkgs_to_stow.append(pkg)
+        elif action == "unstow":
+            pkgs_to_unstow.append(pkg)
+        else:
+            pkgs_to_stow.append(pkg)
+
+    def apply_long_option(
+        given_name: str, primary: str, vtype: str, attached: Optional[str]
+    ) -> None:
+        """Apply one resolved long option, consuming the following argument
+        as its value where Getopt::Long would."""
+        nonlocal i, action
+        if vtype == "string":
+            # An empty attached value ("--ignore=") is rejected like
+            # Getopt::Long rejects it: an empty regex or path is never
+            # what the user meant, and an empty --ignore pattern would
+            # silently match every file. An empty SEPARATE argument
+            # (--dir "") is accepted, also like Getopt::Long.
+            if attached:
+                value = attached
+            elif attached is None and i + 1 < len(args):
+                i += 1
+                value = args[i]
+            else:
+                show_usage_and_exit(f"Option {given_name} requires an argument")
+            if primary in ("ignore", "defer", "override"):
+                _validate_option_regex(value, primary)
+                options.setdefault(primary, []).append(value)
+            else:  # dir, target
+                options[primary] = value
+        elif vtype == "optint":
+            # --verbose takes an optional ATTACHED value only; unlike
+            # Perl it never consumes the next command-line argument
+            # (see docs/perl-differences.md)
+            if not attached:
+                options["verbose"] = options.get("verbose", 0) + 1
+            else:
+                try:
+                    options["verbose"] = int(attached)
+                except ValueError:
+                    # Abort like Perl instead of silently proceeding with
+                    # a default level and modifying the filesystem
+                    show_usage_and_exit(
+                        f'Value "{attached}" invalid for option verbose (number expected)'
+                    )
+        else:  # flag
+            if attached is not None:
+                show_usage_and_exit(f"Option {given_name} does not take an argument")
+            if primary == "simulate":
+                options["simulate"] = True
+            elif primary == "compat":
+                options["compat"] = True
+            elif primary in ("adopt", "no-folding", "dotfiles"):
+                options[primary] = True
+            elif primary == "D":
+                action = "unstow"
+            elif primary == "S":
+                action = "stow"
+            elif primary == "R":
+                action = "restow"
+            elif primary == "help":
+                show_usage_and_exit()
+            else:  # version
+                show_version_and_exit()
+
     while i < len(args):
         arg = args[i]
 
@@ -299,110 +430,21 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
         # see docs/perl-differences.md.)
         if arg == "--":
             for pkg in args[i + 1 :]:
-                if action == "restow":
-                    pkgs_to_unstow.append(pkg)
-                    pkgs_to_stow.append(pkg)
-                elif action == "unstow":
-                    pkgs_to_unstow.append(pkg)
-                else:
-                    pkgs_to_stow.append(pkg)
+                add_package(pkg)
             break
 
-        # Handle options with values
-        elif arg in ("-d", "--dir") and i + 1 < len(args):
-            i += 1
-            options["dir"] = args[i]
-        elif arg.startswith("--dir="):
-            options["dir"] = arg[6:]
-        elif arg.startswith("-d") and len(arg) > 2:
-            options["dir"] = arg[2:]
-
-        elif arg in ("-t", "--target") and i + 1 < len(args):
-            i += 1
-            options["target"] = args[i]
-        elif arg.startswith("--target="):
-            options["target"] = arg[9:]
-        elif arg.startswith("-t") and len(arg) > 2:
-            options["target"] = arg[2:]
-
-        elif arg == "--ignore" and i + 1 < len(args):
-            i += 1
-            regex = args[i]
-            options.setdefault("ignore", []).append(
-                _compile_option_regex(rf"({regex})\Z", "ignore")
-            )
-        elif arg.startswith("--ignore="):
-            regex = arg[9:]
-            options.setdefault("ignore", []).append(
-                _compile_option_regex(rf"({regex})\Z", "ignore")
-            )
-
-        elif arg == "--override" and i + 1 < len(args):
-            i += 1
-            regex = args[i]
-            options.setdefault("override", []).append(
-                _compile_option_regex(rf"\A({regex})", "override")
-            )
-        elif arg.startswith("--override="):
-            regex = arg[11:]
-            options.setdefault("override", []).append(
-                _compile_option_regex(rf"\A({regex})", "override")
-            )
-
-        elif arg == "--defer" and i + 1 < len(args):
-            i += 1
-            regex = args[i]
-            options.setdefault("defer", []).append(
-                _compile_option_regex(rf"\A({regex})", "defer")
-            )
-        elif arg.startswith("--defer="):
-            regex = arg[8:]
-            options.setdefault("defer", []).append(
-                _compile_option_regex(rf"\A({regex})", "defer")
-            )
-
-        # Verbose option with optional value
-        elif arg in ("-v", "--verbose"):
-            options["verbose"] = options.get("verbose", 0) + 1
-        elif arg.startswith("--verbose="):
-            value = arg[10:]
-            if value == "":
-                options["verbose"] = options.get("verbose", 0) + 1
-            else:
-                try:
-                    options["verbose"] = int(value)
-                except ValueError:
-                    # Abort like Perl instead of silently proceeding with
-                    # a default level and modifying the filesystem
-                    show_usage_and_exit(
-                        f'Value "{value}" invalid for option verbose (number expected)'
-                    )
-
-        # Boolean flags
-        elif arg in ("-n", "--no", "--simulate"):
-            options["simulate"] = True
-        elif arg in ("-p", "--compat"):
-            options["compat"] = True
-        elif arg == "--adopt":
-            options["adopt"] = True
-        elif arg == "--no-folding":
-            options["no-folding"] = True
-        elif arg == "--dotfiles":
-            options["dotfiles"] = True
-
-        # Action flags
-        elif arg in ("-D", "--delete"):
-            action = "unstow"
-        elif arg in ("-S", "--stow"):
-            action = "stow"
-        elif arg in ("-R", "--restow"):
-            action = "restow"
-
-        # Help and version
-        elif arg in ("-h", "--help"):
-            show_usage_and_exit()
-        elif arg in ("-V", "--version"):
-            show_version_and_exit()
+        elif arg.startswith("--"):
+            name = arg[2:]
+            attached: Optional[str] = None
+            # Getopt::Long only splits at "=" when at least one name
+            # character precedes it ("--=x" is the unknown option "=x")
+            if "=" in name and not name.startswith("="):
+                name, attached = name.split("=", 1)
+            resolved = _find_long_option(name, allow_abbrev=not posixly_correct)
+            if resolved is None:
+                show_usage_and_exit(f"Unknown option: {name}")
+            given_name, primary, vtype = resolved
+            apply_long_option(given_name, primary, vtype, attached)
 
         # Support +n for simulate (backwards compat with Perl's Getopt::Long)
         # POSIXLY_CORRECT disables + prefix support
@@ -413,18 +455,7 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
         # Package argument (including "-" which is a valid package name)
         # Also matches +n when POSIXLY_CORRECT (+ not recognized as option prefix)
         elif not arg.startswith("-") or arg == "-":
-            if action == "restow":
-                pkgs_to_unstow.append(arg)
-                pkgs_to_stow.append(arg)
-            elif action == "unstow":
-                pkgs_to_unstow.append(arg)
-            else:
-                pkgs_to_stow.append(arg)
-
-        elif arg.startswith("--"):
-            # Unknown long option
-            opt_name = arg[2:]
-            show_usage_and_exit(f"Unknown option: {opt_name}")
+            add_package(arg)
 
         else:
             # Bundled short options: -xyz is parsed as -x -y -z
@@ -474,7 +505,6 @@ def check_packages(pkgs_to_stow: Sequence[str], pkgs_to_unstow: Sequence[str]) -
         show_usage_and_exit(f"{PROGRAM_NAME}: No packages to stow or unstow\n")
 
     for package in itertools.chain(pkgs_to_stow, pkgs_to_unstow):
-        package = package.rstrip("/")
         if "/" in package:
             raise StowError("Slashes are not permitted in package names")
 
@@ -583,12 +613,12 @@ def get_homedir_from_passwd(
 
 def show_usage_and_exit(
     msg: Optional[str] = None, exit_code: Optional[int] = None
-) -> None:
+) -> NoReturn:
     """Print program usage message and exit."""
     if msg:
         print(msg, file=sys.stderr)
 
-    print(f"""{PROGRAM_NAME} (Stow-Python) version {VERSION}
+    print(f"""{PROGRAM_NAME} (GNU Stow) version {VERSION}
 
 Stow-Python is a Python reimplementation of GNU Stow.
 Original GNU Stow by Bob Glickstein, Guillaume Morin, Kahlil Hodgson, Adam Spiers, and others.
@@ -634,9 +664,11 @@ Report deviations from GNU Stow: <https://github.com/isarandi/stow-python/issues
         sys.exit(0)
 
 
-def show_version_and_exit() -> None:
+def show_version_and_exit() -> NoReturn:
     """Print version and exit."""
-    print(f"{PROGRAM_NAME} (Stow-Python) version {VERSION}")
+    # Byte-identical to Perl stow's --version output so that scripts
+    # matching on "GNU Stow" keep working
+    print(f"{PROGRAM_NAME} (GNU Stow) version {VERSION}")
     sys.exit(0)
 
 

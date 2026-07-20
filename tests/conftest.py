@@ -292,8 +292,7 @@ def normalize_stow_output(text):
     This allows the Python reimplementation to have its own branding while
     still passing oracle tests that compare behavior.
     """
-    # Normalize version/help header
-    text = text.replace("(Stow-Python)", "(GNU Stow)")
+    # The version/help header is already byte-identical to GNU Stow's
 
     # Remove the extra description lines added in Stow-Python
     text = text.replace(

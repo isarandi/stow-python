@@ -174,6 +174,33 @@ def _make_config(config: Optional[StowConfig], **kwargs) -> StowConfig:
     return merged
 
 
+_PATTERN_TEMPLATES = {
+    "ignore": r"({})\Z",
+    "defer": r"\A({})",
+    "override": r"\A({})",
+}
+
+
+def _compile_option_pattern(pattern: str, option: str) -> re.Pattern:
+    """Anchor and compile a user-supplied ignore/defer/override pattern.
+
+    Mirrors Perl stow's wrapping of the raw option value: --ignore matches
+    at the end of the path, --defer/--override at the start. Raises
+    StowError on a malformed pattern so callers get a clean fatal error
+    rather than a traceback.
+    """
+    if not isinstance(pattern, str):
+        raise TypeError(
+            f"{option} patterns must be regex strings "
+            f"(anchoring is applied automatically), "
+            f"not {type(pattern).__name__}"
+        )
+    try:
+        return re.compile(_PATTERN_TEMPLATES[option].format(pattern))
+    except re.error as e:
+        raise StowError(f"Failed to compile regexp for --{option}: {e}")
+
+
 # =============================================================================
 # Internal Stower class
 # =============================================================================
@@ -190,12 +217,21 @@ class _Stower:
     def __init__(self, config: StowConfig):
         self.c = config
 
-        # Pre-compiled CLI patterns
-        self._ignore_pats = list(config.ignore)
-        self._defer_pats = list(config.defer)
-        self._override_pats = list(config.override)
+        # Compile the user-supplied patterns (see _compile_option_pattern)
+        self._ignore_pats = [
+            _compile_option_pattern(p, "ignore") for p in config.ignore
+        ]
+        self._defer_pats = [_compile_option_pattern(p, "defer") for p in config.defer]
+        self._override_pats = [
+            _compile_option_pattern(p, "override") for p in config.override
+        ]
 
-
+        # Per-stower cache of parsed .stow-local-ignore/.stow-global-ignore
+        # files, keyed by the path used to read them. The paths are relative
+        # to the target directory, so the cache must not outlive this stower:
+        # a module-wide cache would leak patterns between operations on
+        # different trees that happen to use the same relative layout.
+        self._ignore_file_cache: dict[str, IgnorePatterns] = {}
 
         with self._session():
             # Compute stow_path (relative path from target to stow dir)

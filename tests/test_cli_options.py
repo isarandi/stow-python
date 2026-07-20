@@ -30,6 +30,7 @@ from testutil import init_test_dirs
 
 # Import functions from the package for white-box testing
 from stow_python.cli import parse_cli_options
+from stow_python.stow import _compile_option_pattern
 
 
 @pytest.fixture
@@ -112,13 +113,12 @@ class TestDeferOption:
         args = ["--defer=man", "--defer=info", "dummy"]
         options, pkgs_to_delete, pkgs_to_stow = parse_cli_options(args)
 
-        # Verify defer patterns are compiled regexes anchored at start
-        assert "defer" in options, "defer option should be set"
-        assert len(options["defer"]) == 2, "should have 2 defer patterns"
+        # The parser collects the raw pattern strings in order
+        assert options.get("defer") == ["man", "info"]
 
-        # Check that patterns are start-anchored (\A)
+        # Check that core compilation start-anchors them (\A)
         for i, expected_pattern in enumerate(["man", "info"]):
-            regex = options["defer"][i]
+            regex = _compile_option_pattern(expected_pattern, "defer")
             # Should match at start of string
             msg = 'defer[%d] should match "%s"' % (i, expected_pattern)
             assert regex.match(expected_pattern), msg
@@ -137,13 +137,12 @@ class TestOverrideOption:
         args = ["--override=man", "--override=info", "dummy"]
         options, pkgs_to_delete, pkgs_to_stow = parse_cli_options(args)
 
-        # Verify override patterns are compiled regexes anchored at start
-        assert "override" in options, "override option should be set"
-        assert len(options["override"]) == 2, "should have 2 override patterns"
+        # The parser collects the raw pattern strings in order
+        assert options.get("override") == ["man", "info"]
 
-        # Check that patterns are start-anchored (\A)
+        # Check that core compilation start-anchors them (\A)
         for i, expected_pattern in enumerate(["man", "info"]):
-            regex = options["override"][i]
+            regex = _compile_option_pattern(expected_pattern, "override")
             # Should match at start of string
             msg = 'override[%d] should match "%s"' % (i, expected_pattern)
             assert regex.match(expected_pattern), msg
@@ -156,21 +155,22 @@ class TestIgnoreOption:
     """Test --ignore option regex compilation - corresponds to Perl test 9."""
 
     def test_ignore_compiles_to_regex(self, test_env):
-        """Test that --ignore values are compiled to end-anchored regexes."""
+        """Test that --ignore values compile to end-anchored regexes."""
         args = ["--ignore=~", "--ignore=\\.#.*", "dummy"]
         options, pkgs_to_delete, pkgs_to_stow = parse_cli_options(args)
 
-        # Verify ignore patterns are compiled regexes anchored at end
-        assert "ignore" in options, "ignore option should be set"
-        assert len(options["ignore"]) == 2, "should have 2 ignore patterns"
+        # The parser collects the raw pattern strings; anchoring and
+        # compilation happen in the core so library callers and the CLI
+        # get identical semantics
+        assert options.get("ignore") == ["~", "\\.#.*"]
 
         # Check first pattern (~) - should match at end
-        tilde_regex = options["ignore"][0]
+        tilde_regex = _compile_option_pattern("~", "ignore")
         assert tilde_regex.search("file~"), 'ignore[0] should match "file~"'
         assert not tilde_regex.search("~file"), 'ignore[0] should not match "~file"'
 
         # Check second pattern (.#.*) - should match at end
-        lock_regex = options["ignore"][1]
+        lock_regex = _compile_option_pattern("\\.#.*", "ignore")
         assert lock_regex.search(".#file"), 'ignore[1] should match ".#file"'
         assert lock_regex.search(".#file.lock"), 'ignore[1] should match ".#file.lock"'
 

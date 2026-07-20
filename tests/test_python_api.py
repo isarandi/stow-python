@@ -23,6 +23,7 @@ not the CLI or internal _Stower class.
 """
 
 import os
+import re
 
 import pytest
 
@@ -353,6 +354,47 @@ class TestLibraryRobustness:
                 dir=api_env["stow_dir"],
                 target=api_env["target_dir"],
                 adpot=True,
+            )
+
+    def test_pattern_strings_accepted_and_anchored(self, api_env):
+        """ignore takes raw pattern strings, end-anchored like the CLI."""
+        create_package(
+            api_env["stow_dir"], "pkg", {"notes.txt": "x", "txt.notes": "y"}
+        )
+
+        result = stow(
+            "pkg",
+            dir=api_env["stow_dir"],
+            target=api_env["target_dir"],
+            ignore=[r"\.txt"],
+        )
+
+        assert result.success
+        assert not os.path.lexists(os.path.join(api_env["target_dir"], "notes.txt"))
+        assert os.path.islink(os.path.join(api_env["target_dir"], "txt.notes"))
+
+    def test_compiled_pattern_rejected(self, api_env):
+        """Pre-compiled patterns are rejected: anchoring is applied in core."""
+        create_package(api_env["stow_dir"], "pkg", {"file": "content"})
+
+        with pytest.raises(TypeError, match="regex strings"):
+            stow(
+                "pkg",
+                dir=api_env["stow_dir"],
+                target=api_env["target_dir"],
+                ignore=[re.compile("file")],
+            )
+
+    def test_malformed_pattern_raises_stow_error(self, api_env):
+        """A malformed pattern raises StowError, not re.error."""
+        create_package(api_env["stow_dir"], "pkg", {"file": "content"})
+
+        with pytest.raises(StowError, match="Failed to compile regexp"):
+            stow(
+                "pkg",
+                dir=api_env["stow_dir"],
+                target=api_env["target_dir"],
+                ignore=["foo("],
             )
 
     def test_ignore_file_cache_is_per_operation(self, tmp_path):

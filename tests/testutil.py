@@ -22,26 +22,10 @@ Utilities shared by test scripts - Python port of testutil.pm
 from __future__ import print_function
 
 import os
-import re
 import shutil
-from typing import Iterable, Optional, Union
 
 # Import from the stow_python package
 from stow_python.stow import _Stower, _read_ignore_file
-
-
-def _compile_patterns(
-    patterns: Optional[Iterable[Union[str, re.Pattern]]],
-    prefix: str = "",
-    suffix: str = "",
-) -> list[re.Pattern]:
-    """Compile pattern strings to regex, passing through already-compiled patterns."""
-    if not patterns:
-        return []
-    return [
-        p if isinstance(p, re.Pattern) else re.compile(rf"{prefix}({p}){suffix}")
-        for p in patterns
-    ]
 
 
 from stow_python.stow import LOCAL_IGNORE_FILE, GLOBAL_IGNORE_FILE
@@ -84,11 +68,6 @@ stow_module._read_ignore_file = _read_ignore_file
 
 def Stow(*, dir, target, **kwargs):
     """Create a _Stower instance with keyword arguments (backward compat for tests)."""
-    # Compile patterns like the old Stow.__init__ did
-    ignore = _compile_patterns(kwargs.get("ignore"), suffix=r"\Z")
-    defer = _compile_patterns(kwargs.get("defer"), prefix=r"\A")
-    override = _compile_patterns(kwargs.get("override"), prefix=r"\A")
-
     config = StowConfig(
         dir=dir,
         target=target,
@@ -98,9 +77,10 @@ def Stow(*, dir, target, **kwargs):
         simulate=kwargs.get("simulate", False),
         verbose=kwargs.get("verbose", 0),
         compat=kwargs.get("compat", False),
-        ignore=tuple(ignore),
-        defer=tuple(defer),
-        override=tuple(override),
+        # Pattern anchoring and compilation happen inside _Stower
+        ignore=tuple(kwargs.get("ignore", ())),
+        defer=tuple(kwargs.get("defer", ())),
+        override=tuple(kwargs.get("override", ())),
     )
     return _Stower(config)
 

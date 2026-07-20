@@ -186,7 +186,13 @@ class IgnorePatterns:
 
 
 class StowConfig:
-    """Configuration for stow operations."""
+    """Configuration for stow operations.
+
+    ignore/defer/override are regex pattern STRINGS as the user would pass
+    them on the command line; anchoring (--ignore matches at the end of a
+    path, --defer/--override at the start) and compilation happen inside
+    the stower, so library callers and the CLI get identical semantics.
+    """
 
     def __init__(
         self,
@@ -198,9 +204,9 @@ class StowConfig:
         simulate: bool = False,
         verbose: int = 0,
         compat: bool = False,
-        ignore: tuple[re.Pattern, ...] = (),
-        defer: tuple[re.Pattern, ...] = (),
-        override: tuple[re.Pattern, ...] = (),
+        ignore: tuple[str, ...] = (),
+        defer: tuple[str, ...] = (),
+        override: tuple[str, ...] = (),
     ):
         import os
 

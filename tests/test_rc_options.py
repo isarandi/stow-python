@@ -37,6 +37,7 @@ from stow_python.cli import (
     expand_environment_variables,
     expand_tilde_to_homedir,
 )
+from stow_python.stow import _compile_option_pattern
 from stow_python.types import StowCLIError
 
 
@@ -236,12 +237,10 @@ class TestCwdOverridesHomeStowrc:
             "-d overridden by $PWD/.stowrc"
         )
 
-        # Defer options should be merged (both info and man)
+        # Defer options should be merged (both info and man):
+        # first pattern from home rc (info), second from cwd rc (man)
         assert "defer" in options, "defer option should be set"
-        assert len(options["defer"]) == 2, "should have 2 defer patterns"
-        # First pattern from home rc (info), second from cwd rc (man)
-        assert options["defer"][0].match("info"), "defer[0] should match info"
-        assert options["defer"][1].match("man"), "defer[1] should match man"
+        assert options["defer"] == ["info", "man"], "defer patterns merged in order"
 
 
 class TestCliOverridesStowrc:
@@ -270,11 +269,9 @@ class TestDeferOptionMerging:
         make_file(test_env["home_rc_file"], "--defer=info\n")
         options, pkgs_to_delete, pkgs_to_stow = process_options()
 
-        # Both defer options should be present
+        # Both defer options should be present, .stowrc first
         assert "defer" in options, "defer option should be set"
-        assert len(options["defer"]) == 2, "should have 2 defer patterns"
-        assert options["defer"][0].match("info"), "defer[0] should match info"
-        assert options["defer"][1].match("man"), "defer[1] should match man"
+        assert options["defer"] == ["info", "man"], "defer patterns merged in order"
 
 
 # ======== Filepath Expansion Tests ========
@@ -382,9 +379,10 @@ class TestExpansionInRcFile:
         # Ignore patterns should have escaped $ converted to literal $
         assert "ignore" in options, "ignore option should be set"
         # Check that $FOO$ is literal (backslash removed)
-        assert any(r.search("$FOO$") for r in options["ignore"]), (
-            "environment expansion not applied on --ignore but backslash removed"
-        )
+        assert any(
+            _compile_option_pattern(p, "ignore").search("$FOO$")
+            for p in options["ignore"]
+        ), "environment expansion not applied on --ignore but backslash removed"
 
         # Defer patterns should be present
         assert "defer" in options, "defer option should be set"
@@ -418,17 +416,12 @@ class TestExpansionInRcFile:
         )
 
         # Tilde should NOT be expanded in pattern options
-        assert "ignore" in options, "ignore option should be set"
-        assert options["ignore"][0].search("~/stow"), (
+        assert options.get("ignore") == ["~/stow"], (
             "tilde expansion not applied on --ignore"
         )
-
-        assert "defer" in options, "defer option should be set"
-        assert options["defer"][0].match("~/stow"), (
+        assert options.get("defer") == ["~/stow"], (
             "tilde expansion not applied on --defer"
         )
-
-        assert "override" in options, "override option should be set"
-        assert options["override"][0].match("~/stow"), (
+        assert options.get("override") == ["~/stow"], (
             "tilde expansion not applied on --override"
         )

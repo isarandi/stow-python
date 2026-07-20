@@ -71,9 +71,17 @@ Configuration class with the following fields:
 | `simulate` | bool | False | Plan but don't execute |
 | `verbose` | int | 0 | Debug output level (0-5) |
 | `compat` | bool | False | Legacy unstow algorithm |
-| `ignore` | tuple[re.Pattern, ...] | () | Compiled regex patterns to ignore |
-| `defer` | tuple[re.Pattern, ...] | () | Compiled regex patterns to defer to other packages |
-| `override` | tuple[re.Pattern, ...] | () | Compiled regex patterns to override other packages |
+| `ignore` | tuple[str, ...] | () | Regex pattern strings for files to ignore |
+| `defer` | tuple[str, ...] | () | Regex pattern strings to defer to other packages |
+| `override` | tuple[str, ...] | () | Regex pattern strings to override other packages |
+
+The pattern fields take the same raw regex strings a user would pass to
+`--ignore`/`--defer`/`--override`; anchoring (`--ignore` matches at the end
+of a path, the other two at the start) and compilation happen inside the
+stower, so library callers and the CLI get identical semantics. A malformed
+pattern raises `StowError`; unknown keyword arguments to `stow()`/`unstow()`/
+`restow()` raise `TypeError` rather than being silently ignored.
+
 ### Process-Global State and Threading
 
 Planning and execution `chdir()` into the target tree, mirroring Perl stow's
