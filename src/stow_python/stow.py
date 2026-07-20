@@ -131,7 +131,7 @@ def restow(
 def _make_config(config: Optional[StowConfig], **kwargs) -> StowConfig:
     """Create a StowConfig from optional base config and overrides."""
     if config is None:
-        return StowConfig(
+        merged = StowConfig(
             dir=kwargs.pop("dir", "."),
             target=kwargs.pop("target", None),
             dotfiles=kwargs.pop("dotfiles", False),
@@ -146,7 +146,7 @@ def _make_config(config: Optional[StowConfig], **kwargs) -> StowConfig:
         )
     elif kwargs:
         # Merge base config with overrides
-        return StowConfig(
+        merged = StowConfig(
             dir=kwargs.pop("dir", config.dir),
             target=kwargs.pop("target", config.target),
             dotfiles=kwargs.pop("dotfiles", config.dotfiles),
@@ -161,6 +161,14 @@ def _make_config(config: Optional[StowConfig], **kwargs) -> StowConfig:
         )
     else:
         return config
+
+    if kwargs:
+        # A typo'd option name (e.g. adpot=True) must not silently change
+        # behavior, especially for safety-relevant flags like adopt/simulate
+        raise TypeError(
+            f"unexpected configuration option(s): {', '.join(sorted(kwargs))}"
+        )
+    return merged
 
 
 # =============================================================================

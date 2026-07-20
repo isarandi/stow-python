@@ -343,6 +343,18 @@ class TestLibraryRobustness:
     """Pin the library-API hardening: kwargs validation, string patterns,
     per-operation ignore caching, and deep-tree traversal."""
 
+    def test_unknown_kwarg_rejected(self, api_env):
+        """A typo'd option name must raise, not silently change behavior."""
+        create_package(api_env["stow_dir"], "pkg", {"file": "content"})
+
+        with pytest.raises(TypeError, match="adpot"):
+            stow(
+                "pkg",
+                dir=api_env["stow_dir"],
+                target=api_env["target_dir"],
+                adpot=True,
+            )
+
     def test_ignore_file_cache_is_per_operation(self, tmp_path):
         """Sequential operations on different trees with the same relative
         layout must each read their own .stow-local-ignore file."""
