@@ -31,6 +31,14 @@ from stow_python.types import (
     IgnorePatterns,
     StowConfig,
     StowResult,
+    StowJob,
+    StowScanJob,
+    StowNodeJob,
+    UnstowJob,
+    UnstowScanJob,
+    UnstowNodeJob,
+    FoldJob,
+    CleanupJob,
 )
 from stow_python.util import (
     debug,
@@ -291,7 +299,39 @@ class _Stower:
                         directory which needs stowing as a symlink.
             target_subdir: Subdirectory of the target directory.
 
-        Note: stow_node() and stow_contents() are mutually recursive."""
+        The descent (scan a directory, visit each of its entries, which may
+        scan subdirectories in turn) runs on an explicit job stack rather
+        than by recursion, so arbitrarily deep trees cannot hit the
+        interpreter recursion limit. Jobs execute in exactly the order the
+        recursive formulation would."""
+        jobs: list[StowJob] = [
+            StowScanJob(stow_path, package, pkg_subdir, target_subdir)
+        ]
+        while jobs:
+            job = jobs.pop()
+            if isinstance(job, StowScanJob):
+                self._stow_scan_dir(
+                    job.stow_path, job.package, job.pkg_subdir, job.target_subdir, jobs
+                )
+            else:
+                self._stow_visit_node(
+                    job.stow_path,
+                    job.package,
+                    job.pkg_subdir,
+                    job.target_subdir,
+                    job.node,
+                    jobs,
+                )
+
+    def _stow_scan_dir(
+        self,
+        stow_path: str,
+        package: str,
+        pkg_subdir: str,
+        target_subdir: str,
+        jobs: list[StowJob],
+    ) -> None:
+        """List one package directory and queue a visit for each entry."""
         if self._should_skip_target(pkg_subdir):
             return
 
@@ -321,32 +361,50 @@ class _Stower:
                 f"cannot read directory: {pkg_path_from_cwd} ({e.strerror})", errno=2
             ) from e
 
-        for node in sorted(listing):
-            if node in (".", ".."):
-                continue
+        # Pushed in reverse so that popping visits entries in sorted order
+        for node in sorted(listing, reverse=True):
+            jobs.append(
+                StowNodeJob(stow_path, package, pkg_subdir, target_subdir, node)
+            )
 
-            package_node_path = join_paths(pkg_subdir, node)
-            target_node = node
-            target_node_path = join_paths(target_subdir, target_node)
+    def _stow_visit_node(
+        self,
+        stow_path: str,
+        package: str,
+        pkg_subdir: str,
+        target_subdir: str,
+        node: str,
+        jobs: list[StowJob],
+    ) -> None:
+        """Run the per-entry ignore/dotfiles checks, then stow the node."""
+        if node in (".", ".."):
+            return
 
-            if self._should_ignore(stow_path, package, target_node_path):
-                continue
+        package_node_path = join_paths(pkg_subdir, node)
+        target_node = node
+        target_node_path = join_paths(target_subdir, target_node)
 
-            if self.c.dotfiles:
-                adjusted = adjust_dotfile(node)
-                if adjusted != node:
-                    debug(4, 1, f"Adjusting: {node} => {adjusted}")
-                    target_node = adjusted
-                    target_node_path = join_paths(target_subdir, target_node)
+        if self._should_ignore(stow_path, package, target_node_path):
+            return
 
-            self._stow_node(stow_path, package, package_node_path, target_node_path)
+        if self.c.dotfiles:
+            adjusted = adjust_dotfile(node)
+            if adjusted != node:
+                debug(4, 1, f"Adjusting: {node} => {adjusted}")
+                target_node = adjusted
+                target_node_path = join_paths(target_subdir, target_node)
+
+        self._stow_node(stow_path, package, package_node_path, target_node_path, jobs)
 
     def _stow_node(
-        self, stow_path: str, package: str, pkg_subpath: str, target_subpath: str
+        self,
+        stow_path: str,
+        package: str,
+        pkg_subpath: str,
+        target_subpath: str,
+        jobs: list[StowJob],
     ) -> None:
-        """Stow the given node.
-
-        Note: stow_node() and stow_contents() are mutually recursive."""
+        """Stow the given node, queueing subdirectory scans onto the job stack."""
         debug(3, 0, f"Stowing entry {stow_path} / {package} / {pkg_subpath}")
 
         # Calculate the path to the package directory or sub-directory
@@ -377,11 +435,11 @@ class _Stower:
         # Does the target already exist?
         if self._is_a_link(target_subpath):
             self._stow_node_for_existing_link(
-                stow_path, package, pkg_subpath, target_subpath, link_dest
+                stow_path, package, pkg_subpath, target_subpath, link_dest, jobs
             )
         elif self._is_a_node(target_subpath):
             self._stow_node_for_existing_node(
-                package, pkg_subpath, target_subpath, pkg_path_from_cwd, link_dest
+                package, pkg_subpath, target_subpath, pkg_path_from_cwd, link_dest, jobs
             )
         elif (
             self.c.no_folding
@@ -389,7 +447,9 @@ class _Stower:
             and not os.path.islink(pkg_path_from_cwd)
         ):
             self._do_mkdir(target_subpath)
-            self.stow_contents(self.stow_path, package, pkg_subpath, target_subpath)
+            jobs.append(
+                StowScanJob(self.stow_path, package, pkg_subpath, target_subpath)
+            )
         else:
             self._do_link(link_dest, target_subpath)
 
@@ -400,6 +460,7 @@ class _Stower:
         pkg_subpath: str,
         target_subpath: str,
         link_dest: str,
+        jobs: list[StowJob],
     ) -> None:
         """Handle stowing when target is an existing link."""
         existing_link_dest = self._read_a_link(target_subpath)
@@ -445,13 +506,16 @@ class _Stower:
                 )
                 self._do_unlink(target_subpath)
                 self._do_mkdir(target_subpath)
-                self.stow_contents(
-                    stowed.stow_dir,
-                    stowed.package,
-                    pkg_subpath,
-                    target_subpath,
+                # Pushed in reverse: the previously stowed package's
+                # contents are scanned before this package's
+                jobs.append(
+                    StowScanJob(self.stow_path, package, pkg_subpath, target_subpath)
                 )
-                self.stow_contents(self.stow_path, package, pkg_subpath, target_subpath)
+                jobs.append(
+                    StowScanJob(
+                        stowed.stow_dir, stowed.package, pkg_subpath, target_subpath
+                    )
+                )
             else:
                 self._record_conflict(
                     package,
@@ -470,6 +534,7 @@ class _Stower:
         target_subpath: str,
         pkg_path_from_cwd: str,
         link_dest: str,
+        jobs: list[StowJob],
     ) -> None:
         """Handle stowing when target is an existing node (not a link)."""
         debug(4, 1, f"Evaluate existing node: {target_subpath}")
@@ -480,7 +545,9 @@ class _Stower:
                     f"cannot stow non-directory {pkg_path_from_cwd} over existing directory target {target_subpath}",
                 )
             else:
-                self.stow_contents(self.stow_path, package, pkg_subpath, target_subpath)
+                jobs.append(
+                    StowScanJob(self.stow_path, package, pkg_subpath, target_subpath)
+                )
         else:
             # target_subpath is not a current or planned directory
             if self.c.adopt:
@@ -504,8 +571,33 @@ class _Stower:
     ) -> None:
         """Unstow the contents of the given directory.
 
-        Note: unstow_node() and unstow_contents() are mutually recursive.
-        Here we traverse the package tree, rather than the target tree."""
+        Here we traverse the package tree, rather than the target tree
+        (except in compat mode). Like stow_contents(), the descent runs on
+        an explicit job stack in exactly the recursive order; the "fold"
+        and "cleanup" jobs run after the corresponding subtree completes,
+        mirroring the work the recursive formulation does after each
+        nested call returns."""
+        jobs: list[UnstowJob] = [UnstowScanJob(package, pkg_subdir, target_subdir)]
+        while jobs:
+            job = jobs.pop()
+            if isinstance(job, UnstowScanJob):
+                self._unstow_scan_dir(
+                    job.package, job.pkg_subdir, job.target_subdir, jobs
+                )
+            elif isinstance(job, UnstowNodeJob):
+                self._unstow_visit_node(
+                    job.package, job.pkg_subdir, job.target_subdir, job.node, jobs
+                )
+            elif isinstance(job, FoldJob):
+                self._fold_if_foldable(job.target_subdir)
+            else:
+                if os.path.isdir(job.target_subdir):
+                    self._cleanup_invalid_links(job.target_subdir)
+
+    def _unstow_scan_dir(
+        self, package: str, pkg_subdir: str, target_subdir: str, jobs: list[UnstowJob]
+    ) -> None:
+        """List one directory and queue a visit for each entry."""
         if self._should_skip_target(target_subdir):
             return
 
@@ -556,40 +648,53 @@ class _Stower:
                 f"cannot read directory: {dir_to_read} ({e.strerror})", errno=2
             ) from e
 
-        for node in sorted(listing):
-            if node in (".", ".."):
-                continue
+        # Pushed first so it pops last: clean-up runs after all of this
+        # directory's entries (and their subtrees) have been processed
+        if not self.c.compat:
+            jobs.append(CleanupJob(target_subdir))
+        # Pushed in reverse so that popping visits entries in sorted order
+        for node in sorted(listing, reverse=True):
+            jobs.append(UnstowNodeJob(package, pkg_subdir, target_subdir, node))
 
-            package_node = node
-            target_node = node
-            target_node_path = join_paths(target_subdir, target_node)
+    def _unstow_visit_node(
+        self,
+        package: str,
+        pkg_subdir: str,
+        target_subdir: str,
+        node: str,
+        jobs: list[UnstowJob],
+    ) -> None:
+        """Run the per-entry ignore/dotfiles checks, then unstow the node."""
+        if node in (".", ".."):
+            return
 
-            if self._should_ignore(self.stow_path, package, target_node_path):
-                continue
+        package_node = node
+        target_node = node
+        target_node_path = join_paths(target_subdir, target_node)
 
-            if self.c.dotfiles:
-                if self.c.compat:
-                    adjusted = unadjust_dotfile(node)
-                    if adjusted != node:
-                        debug(4, 1, f"Reverse adjusting: {node} => {adjusted}")
-                        package_node = adjusted
-                else:
-                    adjusted = adjust_dotfile(node)
-                    if adjusted != node:
-                        debug(4, 1, f"Adjusting: {node} => {adjusted}")
-                        target_node = adjusted
-                        target_node_path = join_paths(target_subdir, target_node)
+        if self._should_ignore(self.stow_path, package, target_node_path):
+            return
 
-            package_node_path = join_paths(pkg_subdir, package_node)
-            self._unstow_node(package, package_node_path, target_node_path)
+        if self.c.dotfiles:
+            if self.c.compat:
+                adjusted = unadjust_dotfile(node)
+                if adjusted != node:
+                    debug(4, 1, f"Reverse adjusting: {node} => {adjusted}")
+                    package_node = adjusted
+            else:
+                adjusted = adjust_dotfile(node)
+                if adjusted != node:
+                    debug(4, 1, f"Adjusting: {node} => {adjusted}")
+                    target_node = adjusted
+                    target_node_path = join_paths(target_subdir, target_node)
 
-        if not self.c.compat and os.path.isdir(target_subdir):
-            self._cleanup_invalid_links(target_subdir)
+        package_node_path = join_paths(pkg_subdir, package_node)
+        self._unstow_node(package, package_node_path, target_node_path, jobs)
 
-    def _unstow_node(self, package: str, pkg_subpath: str, target_subpath: str) -> None:
-        """Unstow the given node.
-
-        Note: unstow_node() and unstow_contents() are mutually recursive."""
+    def _unstow_node(
+        self, package: str, pkg_subpath: str, target_subpath: str, jobs: list[UnstowJob]
+    ) -> None:
+        """Unstow the given node, queueing subdirectory scans onto the job stack."""
         debug(3, 0, f"Unstowing entry from target: {target_subpath}")
         debug(4, 1, f"Package entry: {self.stow_path} / {package} / {pkg_subpath}")
 
@@ -597,15 +702,20 @@ class _Stower:
         if self._is_a_link(target_subpath):
             self._unstow_link_node(package, pkg_subpath, target_subpath)
         elif os.path.isdir(target_subpath):
-            self.unstow_contents(package, pkg_subpath, target_subpath)
-            # This action may have made the parent directory foldable
-            parent_in_pkg = self._foldable(target_subpath)
-            if parent_in_pkg:
-                self._fold_tree(target_subpath, parent_in_pkg)
+            # The fold check runs only after the subtree scan completes,
+            # since unstowing the contents may make the directory foldable
+            jobs.append(FoldJob(target_subpath))
+            jobs.append(UnstowScanJob(package, pkg_subpath, target_subpath))
         elif os.path.exists(target_subpath):
             debug(2, 1, f"{target_subpath} doesn't need to be unstowed")
         else:
             debug(2, 1, f"{target_subpath} did not exist to be unstowed")
+
+    def _fold_if_foldable(self, target_subdir: str) -> None:
+        """Fold the directory if unstowing its contents made that possible."""
+        parent_in_pkg = self._foldable(target_subdir)
+        if parent_in_pkg:
+            self._fold_tree(target_subdir, parent_in_pkg)
 
     def _unstow_link_node(
         self, package: str, pkg_subpath: str, target_subpath: str

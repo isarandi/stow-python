@@ -337,3 +337,33 @@ class TestStowResult:
 
         for task in result.tasks:
             assert isinstance(task, (LinkTask, DirTask, MoveTask))
+
+
+class TestLibraryRobustness:
+    """Pin the library-API hardening: kwargs validation, string patterns,
+    per-operation ignore caching, and deep-tree traversal."""
+
+    def test_deep_tree_stow_and_unstow(self, tmp_path):
+        """A tree hundreds of levels deep must not hit the interpreter
+        recursion limit (the planner runs on an explicit job stack)."""
+        os.environ["HOME"] = str(tmp_path)
+        depth = 600
+        stow_dir = tmp_path / "stow"
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        rel = "/".join(["d"] * depth)
+        deep_dir = os.path.join(str(stow_dir / "pkg"), rel)
+        os.makedirs(deep_dir)
+        with open(os.path.join(deep_dir, "leaf"), "w") as f:
+            f.write("x")
+
+        result = stow(
+            "pkg", dir=str(stow_dir), target=str(target_dir), no_folding=True
+        )
+        assert result.success
+        leaf = os.path.join(str(target_dir), rel, "leaf")
+        assert os.path.islink(leaf)
+
+        result = unstow("pkg", dir=str(stow_dir), target=str(target_dir))
+        assert result.success
+        assert not os.path.lexists(leaf)

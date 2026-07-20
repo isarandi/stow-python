@@ -95,6 +95,64 @@ Task = Union[LinkTask, DirTask, MoveTask]
 
 
 @dataclass(frozen=True)
+class StowScanJob:
+    """Planner job: list a package directory and visit its entries."""
+
+    stow_path: str
+    package: str
+    pkg_subdir: str
+    target_subdir: str
+
+
+@dataclass(frozen=True)
+class StowNodeJob:
+    """Planner job: run per-entry checks and stow one node."""
+
+    stow_path: str
+    package: str
+    pkg_subdir: str
+    target_subdir: str
+    node: str
+
+
+@dataclass(frozen=True)
+class UnstowScanJob:
+    """Planner job: list a directory and visit its entries for unstowing."""
+
+    package: str
+    pkg_subdir: str
+    target_subdir: str
+
+
+@dataclass(frozen=True)
+class UnstowNodeJob:
+    """Planner job: run per-entry checks and unstow one node."""
+
+    package: str
+    pkg_subdir: str
+    target_subdir: str
+    node: str
+
+
+@dataclass(frozen=True)
+class FoldJob:
+    """Planner job: fold a directory once its subtree has been unstowed."""
+
+    target_subdir: str
+
+
+@dataclass(frozen=True)
+class CleanupJob:
+    """Planner job: clean invalid links after a directory's entries are done."""
+
+    target_subdir: str
+
+
+StowJob = Union[StowScanJob, StowNodeJob]
+UnstowJob = Union[UnstowScanJob, UnstowNodeJob, FoldJob, CleanupJob]
+
+
+@dataclass(frozen=True)
 class StowedPath:
     """Result of find_stowed_path - identifies ownership of a symlink."""
 
