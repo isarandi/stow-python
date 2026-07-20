@@ -104,3 +104,163 @@ class TestDocumentedDivergences:
         )
         assert rc == 0, f"Perl stow failed: {stderr}"
         assert "Unsuccessful" in stderr, "Perl should warn about the newline"
+
+    def test_foldable_empty_dest_preserves_foreign_link(self, stow_env):
+        """perl-differences.md #14: foldable('') data-loss bug.
+
+        pkg1 and pkg2 both populate dir/. With both stowed, target/dir is a
+        real directory holding file1 and file2 symlinks. The user then adds
+        an unrelated symlink `a -> file1` whose destination has NO slash,
+        which is what trips Perl's foldable('') bug. Unstowing pkg2 makes
+        dir foldable in Perl's eyes: Perl folds dir back into a single
+        symlink and DESTROYS the user's link `a` (data loss). Python treats
+        the directory as not foldable, leaving dir real and `a` intact.
+        """
+        stow_env.create_package("pkg1", {"dir/file1": "one"})
+        stow_env.create_package("pkg2", {"dir/file2": "two"})
+
+        dir_path = os.path.join(stow_env.target_dir, "dir")
+        a_path = os.path.join(stow_env.target_dir, "dir", "a")
+
+        # Perl: folds dir into a symlink; the user's link `a` is destroyed.
+        stow_env.reset_target()
+        stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1", "pkg2"])
+        os.symlink("file1", a_path)
+        rc, stdout, stderr = stow_env.run_perl_stow(
+            ["-t", stow_env.target_dir, "-D", "pkg2"]
+        )
+        assert rc == 0, f"Perl unstow failed: {stderr}"
+        assert os.path.islink(dir_path), "Perl folds dir into a symlink"
+        assert os.readlink(dir_path) == "../stow/pkg1/dir"
+        # dir is now a symlink into pkg1, which has no `a`: the link is gone.
+        assert not os.path.lexists(a_path), "Perl destroyed the user's link a"
+
+        # Python: dir stays a real directory and `a` survives with its dest.
+        stow_env.reset_target()
+        stow_env.run_python_stow(["-t", stow_env.target_dir, "pkg1", "pkg2"])
+        os.symlink("file1", a_path)
+        rc, stdout, stderr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "-D", "pkg2"]
+        )
+        assert rc == 0, f"Python unstow failed: {stderr}"
+        assert not os.path.islink(dir_path), "Python keeps dir a real directory"
+        assert os.path.isdir(dir_path)
+        assert os.path.islink(a_path), "Python preserves the user's link a"
+        assert os.readlink(a_path) == "file1"
+
+    def test_nonascii_option_bundle_byte_vs_char(self, stow_env):
+        """perl-differences.md #2: '-é' bundle.
+
+        Perl scans the option string byte by byte, so the two UTF-8 bytes
+        of é each produce an 'Unknown option' line; Python scans by
+        character and reports a single line. Both exit 1.
+        """
+        stow_env.create_package("pkg", {"file": "content"})
+
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(
+            ["-t", stow_env.target_dir, "-é", "pkg"]
+        )
+        stow_env.reset_target()
+        yrc, _, yerr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "-é", "pkg"]
+        )
+
+        assert prc == 1 and yrc == 1
+        assert perr.count("Unknown option:") == 2, f"Perl stderr: {perr!r}"
+        assert yerr.count("Unknown option:") == 1, f"Python stderr: {yerr!r}"
+
+    def test_plus_v_getopt_compat_vs_package(self, stow_env):
+        """perl-differences.md #5: '+v'.
+
+        Perl's deprecated getopt_compat treats '+v' like '-v' (verbose) and
+        stows pkg; Python only special-cases '+n', so '+v' is a package name
+        and stow fails because no such package exists.
+        """
+        stow_env.create_package("pkg", {"file": "content"})
+
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(
+            ["-t", stow_env.target_dir, "+v", "pkg"]
+        )
+        assert prc == 0, f"Perl should treat +v as -v: {perr}"
+        assert os.path.islink(os.path.join(stow_env.target_dir, "file"))
+
+        stow_env.reset_target()
+        yrc, _, yerr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "+v", "pkg"]
+        )
+        assert yrc != 0, "Python treats +v as a (missing) package"
+        assert "+v" in yerr
+        check_not_exists(stow_env, "file")
+
+    def test_verbose_value_gobbling(self, stow_env):
+        """perl-differences.md #10: '-v 3 pkg'.
+
+        Perl's 'verbose|v:+' spec gobbles the following integer as the
+        verbosity level and stows pkg; Python treats 3 as a package name
+        and fails because no such package exists.
+        """
+        stow_env.create_package("pkg", {"file": "content"})
+
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(
+            ["-t", stow_env.target_dir, "-v", "3", "pkg"]
+        )
+        assert prc == 0, f"Perl should gobble 3 as verbosity: {perr}"
+        assert os.path.islink(os.path.join(stow_env.target_dir, "file"))
+
+        stow_env.reset_target()
+        yrc, _, yerr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "-v", "3", "pkg"]
+        )
+        assert yrc != 0, "Python treats 3 as a (missing) package"
+        assert "3" in yerr
+        check_not_exists(stow_env, "file")
+
+    def test_ignore_perl_regex_QE_clause(self, stow_env):
+        r"""perl-differences.md #12: --ignore='\Qfoo.\E'.
+
+        Perl warns 'Unrecognized escape' but proceeds and stows; Python
+        rejects the Perl-only \Q...\E regex syntax with a clean 'Failed to
+        compile regexp' error (exit 1, no traceback) and stows nothing.
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(
+            ["-t", stow_env.target_dir, "--ignore=\\Qfoo.\\E", "pkg"]
+        )
+        assert prc == 0, f"Perl should warn but proceed: {perr}"
+        assert os.path.islink(os.path.join(stow_env.target_dir, "bin"))
+        assert "Unrecognized escape" in perr
+
+        stow_env.reset_target()
+        yrc, _, yerr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "--ignore=\\Qfoo.\\E", "pkg"]
+        )
+        assert yrc == 1
+        assert "Failed to compile regexp" in yerr
+        assert "Traceback" not in yerr
+        check_not_exists(stow_env, "bin")
+
+    def test_chkstow_stow_dir_zero_falls_back(self, stow_env):
+        """perl-differences.md #16: chkstow with STOW_DIR="0".
+
+        Perl uses $ENV{STOW_DIR} in boolean context, and "0" is false in
+        Perl, so chkstow falls back to scanning the default /usr/local and
+        never sees the local ./0 tree. Python treats "0" as an ordinary
+        non-empty directory name, scans it, and reports the dangling link
+        inside. Pin: the bogus link appears only in Python's output.
+        """
+        # chkstow runs with cwd=target_dir, so ./0 lives under target.
+        zero = os.path.join(stow_env.target_dir, "0")
+        os.makedirs(zero)
+        os.symlink("nonexistent-target", os.path.join(zero, "bogus"))
+
+        prc, pout, _ = stow_env.run_perl_chkstow(["-b"], env={"STOW_DIR": "0"})
+        yrc, yout, _ = stow_env.run_python_chkstow(["-b"], env={"STOW_DIR": "0"})
+
+        assert prc == 0 and yrc == 0
+        assert "0/bogus" in yout, "Python scans ./0 and reports the dangling link"
+        assert "0/bogus" not in pout, "Perl fell back to /usr/local, never saw ./0"

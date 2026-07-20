@@ -425,3 +425,239 @@ class TestCliOptionsBoth:
         assert "Failed to compile regexp" in stderr
         assert "Traceback" not in stderr
         check_not_exists(stow_env, "file")
+
+    def test_long_option_abbreviation_simulate(self, stow_env):
+        """--sim is a unique prefix of --simulate (Getopt::Long abbreviation).
+
+        Abbreviation is disabled under POSIXLY_CORRECT, so both
+        implementations reject --sim there ("Unknown option: sim"). The
+        harness runs both modes automatically, so a single equality check
+        covers resolution when abbreviation is on and rejection when off.
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        def setup():
+            pass
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--sim", "pkg"],
+            setup,
+            None,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+    def test_long_option_abbreviation_verbose(self, stow_env):
+        """--verb resolves to --verbose (abbreviation); disabled under POSIXLY."""
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        def setup():
+            pass
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--verb", "pkg"],
+            setup,
+            None,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+    def test_long_option_abbreviation_delete(self, stow_env):
+        """--del resolves to --delete (abbreviation); disabled under POSIXLY."""
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        def setup():
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg"])
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--del", "pkg"],
+            setup,
+            None,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+    def test_ambiguous_long_option_prefix(self, stow_env):
+        """--de is an ambiguous prefix (defer, delete): identical error.
+
+        Both implementations report the same 'Option de is ambiguous
+        (defer, delete)' error and exit 1. Under POSIXLY_CORRECT the prefix
+        is not expanded and both report 'Unknown option: de'; the harness
+        covers both modes.
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        def setup():
+            pass
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--de", "pkg"],
+            setup,
+            None,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+        # Pin the exact ambiguity message (abbreviation enabled).
+        stow_env.reset_target()
+        rc, stdout, stderr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "--de", "pkg"]
+        )
+        assert rc == 1
+        assert "Option de is ambiguous (defer, delete)" in stderr
+
+    def test_empty_attached_value_rejected(self, stow_env):
+        """--ignore= (and siblings) with an empty attached value is rejected.
+
+        Perl's Getopt::Long treats an empty '=value' as a missing argument.
+        Both implementations fail with 'Option X requires an argument',
+        exit 1, and stow nothing.
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        def setup():
+            pass
+
+        # --ignore= through the full equality harness (both POSIXLY modes).
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--ignore=", "pkg"],
+            setup,
+            None,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+        # The sibling value options behave the same way.
+        for opt in ["--ignore=", "--defer=", "--override=", "--target=", "--dir="]:
+            name = opt[len("--"):-1]
+            expected = "Option %s requires an argument" % name
+
+            stow_env.reset_target()
+            prc, _, perr = stow_env.run_perl_stow([opt, "pkg"])
+            stow_env.reset_target()
+            yrc, _, yerr = stow_env.run_python_stow([opt, "pkg"])
+
+            assert prc == 1 and yrc == 1, "%s: rc perl=%d py=%d" % (opt, prc, yrc)
+            assert expected in perr, "%s: perl stderr=%r" % (opt, perr)
+            assert expected in yerr, "%s: py stderr=%r" % (opt, yerr)
+            check_not_exists(stow_env, "bin/file")
+
+    def test_missing_final_value_rejected(self, stow_env):
+        """A value option ending the argv with no value: 'pkg --target'.
+
+        Both implementations report 'Option target requires an argument'
+        and exit 1.
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        def setup():
+            pass
+
+        run_both_tests(
+            stow_env,
+            ["pkg", "--target"],
+            setup,
+            None,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+        stow_env.reset_target()
+        rc, stdout, stderr = stow_env.run_python_stow(["pkg", "--target"])
+        assert rc == 1
+        assert "Option target requires an argument" in stderr
+
+    def test_unknown_letter_bundle_reports_each(self, stow_env):
+        """A short bundle of unknown letters '-xy' reports both letters.
+
+        Both implementations emit 'Unknown option: x' AND 'Unknown option:
+        y' and exit 1.
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        def setup():
+            pass
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "-xy", "pkg"],
+            setup,
+            None,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+        stow_env.reset_target()
+        rc, stdout, stderr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "-xy", "pkg"]
+        )
+        assert rc == 1
+        assert "Unknown option: x" in stderr
+        assert "Unknown option: y" in stderr
+
+    def test_trailing_slash_in_package_name(self, stow_env):
+        """'stow pkg/' behaves identically to 'stow pkg' (slash stripped)."""
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "bin", "../stow/pkg/bin")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg/"],
+            setup,
+            check,
+            check_on_simulate=False,
+            compare_fs_ops=True,
+        )
+
+    def test_version_byte_identical(self, stow_env):
+        """--version prints byte-identical output on stdout, nothing on stderr."""
+        prc, pout, perr = stow_env.run_perl_stow(["--version"])
+        yrc, yout, yerr = stow_env.run_python_stow(["--version"])
+
+        assert prc == 0 and yrc == 0
+        assert pout == "stow (GNU Stow) version 2.4.1\n"
+        assert yout == pout, "version stdout mismatch: perl=%r py=%r" % (pout, yout)
+        assert perr == "" and yerr == ""
+
+    def test_package_named_double_dash_o_matches(self, stow_env):
+        """Package-like arg '--o=0' now parses identically on both.
+
+        The Getopt::Long emulation reproduces Perl's '--option=value'
+        handling: '--o=0' is consumed as an unknown-but-valued option,
+        leaving no packages, so both report 'No packages to stow or unstow'
+        (exit 1). Under POSIXLY_CORRECT both instead report 'Unknown
+        option: o'. (This was documented divergence #1, now resolved.)
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        # Default mode: both report "No packages to stow or unstow".
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(["-t", stow_env.target_dir, "--o=0"])
+        stow_env.reset_target()
+        yrc, _, yerr = stow_env.run_python_stow(["-t", stow_env.target_dir, "--o=0"])
+        assert prc == 1 and yrc == 1
+        assert "No packages to stow or unstow" in perr
+        assert "No packages to stow or unstow" in yerr
+
+        # POSIXLY_CORRECT: both report "Unknown option: o".
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(
+            ["-t", stow_env.target_dir, "--o=0"], env={"POSIXLY_CORRECT": ""}
+        )
+        stow_env.reset_target()
+        yrc, _, yerr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "--o=0"], env={"POSIXLY_CORRECT": ""}
+        )
+        assert prc == 1 and yrc == 1
+        assert "Unknown option: o" in perr
+        assert "Unknown option: o" in yerr

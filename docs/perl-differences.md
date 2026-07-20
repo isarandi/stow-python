@@ -3,18 +3,22 @@
 This document catalogues behavioral differences between stow-python and GNU Stow 2.4.1 (Perl).
 These are edge cases discovered through property-based testing with Hypothesis.
 
-## 1. Package Names Starting with `--` (Long Option Style)
+## 1. Package Names Starting with `--` (Long Option Style) — Resolved, Now Matches
 
 **Example:** Package named `--o=0`
 
 | Implementation | Behavior |
 |----------------|----------|
-| Perl | Getopt::Long silently consumes `--o=0` as unknown option with empty value, then reports "No packages to stow" |
-| Python | Reports "Unknown option: o=0" |
+| Perl | Getopt::Long consumes `--o=0` as an unknown-but-valued option, then reports "No packages to stow or unstow" (exit 1). Under `POSIXLY_CORRECT`, reports "Unknown option: o" (exit 1). |
+| Python | Identical: "No packages to stow or unstow" (exit 1), or "Unknown option: o" under `POSIXLY_CORRECT`. |
 
-**Result:** Both fail with exit code 1, but different error messages.
+**Result:** No longer a divergence. The Getopt::Long emulation now reproduces
+Perl's `--option=value` handling exactly, so both implementations produce the
+same message and exit code.
 
-**Cause:** Getopt::Long has special handling for `--option=value` syntax that our manual parser doesn't replicate.
+**Pinned by:** an equality test
+(`test_package_named_double_dash_o_matches` in `tests/test_cli_options_both.py`)
+that asserts both implementations match in default and `POSIXLY_CORRECT` modes.
 
 ## 2. Package Names Starting with `-` + Non-ASCII Bytes
 
@@ -22,12 +26,15 @@ These are edge cases discovered through property-based testing with Hypothesis.
 
 | Implementation | Behavior |
 |----------------|----------|
-| Perl | Prints "Unknown option" twice (interprets multi-byte sequence as separate characters) |
-| Python | Prints "Unknown option: \x80" once |
+| Perl | Prints one "Unknown option" line per BYTE of the unknown sequence |
+| Python | Prints one "Unknown option" line per CHARACTER |
 
-**Result:** Both fail, but Perl prints two error lines, Python prints one.
+**Result:** Both report every unknown flag in the bundle and fail with exit
+code 1, but for non-ASCII characters Perl prints one error line per UTF-8
+byte while Python prints one per character (e.g. two lines vs one for `é`).
 
-**Cause:** Perl's character-by-character option parsing vs Python's string handling of non-ASCII bytes.
+**Cause:** Perl processes the option bundle as bytes; Python as decoded
+characters.
 
 ## 3. Newline in Path Breaks Perl's Ignore Check
 
@@ -165,14 +172,23 @@ This is an extremely unlikely scenario. The check is legacy protection for ancie
 
 **Testing implication:** Oracle tests for chkstow compare only return code, stdout, and stderr - not filesystem operations via strace. The output matching is sufficient to verify behavioral equivalence.
 
-## 10. Getopt::Long Incidentals Not Supported
+## 10. `-v N` Value Gobbling Not Supported
 
-Perl's Getopt::Long provides several undocumented conveniences that GNU Stow never mentions in its manual and that we deliberately do not reproduce:
+Long-option abbreviation IS supported, matching Getopt::Long's auto_abbrev:
+any unique prefix resolves (`--sim`, `--tar`, `--verb`), every alias works in
+long form (`--R`, `--n`, `--t DIR`), an ambiguous prefix is a fatal
+`Option de is ambiguous (defer, delete)` error, and POSIXLY_CORRECT disables
+abbreviation — all identical to Perl. Likewise, a mandatory-value option with
+an empty attached value (`--ignore=`) or no value at all (`stow pkg --target`)
+fails with `Option X requires an argument` exactly like Getopt::Long.
 
-- **Long-option abbreviation**: `--sim`, `--tar`, `--verb` work in Perl (any unique prefix); we require the full name. Perl also accepts every alias in long form (`--R`, `--n`, `--t DIR`).
-- **`-v N` value gobbling**: Perl's `verbose|v:+` spec consumes a following integer argument (`stow -v 2 pkg` sets level 2); we treat `2` as a package name and fail loudly.
-
-In all these cases the failure is a clear error with a nonzero exit code — never silent misbehavior. The bundled form `-nt DIR` / `-nd DIR` (a value option ending a short-option bundle taking the next argument) IS supported, since it matches universal Unix conventions (`tar -xf FILE`).
+The one Getopt::Long behavior we deliberately do not reproduce:
+**`-v N` value gobbling**. Perl's `verbose|v:+` spec consumes a following
+integer argument (`stow -v 2 pkg` sets level 2); we treat `2` as a package
+name and fail loudly. The failure is a clear error with a nonzero exit
+code — never silent misbehavior. The bundled form `-nt DIR` / `-nd DIR`
+(a value option ending a short-option bundle taking the next argument) IS
+supported, since it matches universal Unix conventions (`tar -xf FILE`).
 
 ## 11. `--` Terminator: Packages, Not Discarded
 
@@ -194,6 +210,32 @@ When unstowing makes a directory foldable, Perl's `foldable()` initializes its t
 ## 15. chkstow Follows a Symlinked Target
 
 Perl's File::Find does not descend through a top-level symlink argument, so `chkstow -t <symlink-to-dir>` silently checks nothing and exits 0 — an "all clear" from a diagnostic tool that inspected nothing. We follow the explicitly given target (and only that; symlinks *inside* the tree are still not descended). Covered by a pinning test asserting both behaviors.
+
+## 16. chkstow with `STOW_DIR=0`
+
+**Example:** `STOW_DIR=0 chkstow -b` (a stow/target directory literally named `0`)
+
+| Implementation | Behavior |
+|----------------|----------|
+| Perl | `$ENV{STOW_DIR} \|\| '/usr/local/'` treats the string `"0"` as false, so chkstow silently scans `/usr/local/` instead |
+| Python | `STOW_DIR=0` names the real directory `0` and is honored |
+
+**Result:** Perl's chkstow reports on `/usr/local/`; Python's reports on `./0`.
+
+**Cause:** Perl truthiness treats `"0"` as false. Perl's own `stow` uses
+`length $ENV{STOW_DIR}` and handles `0` correctly, so upstream is internally
+inconsistent here; we side with stow's semantics for both tools. A diagnostic
+silently inspecting a completely different tree is the worse failure mode.
+Covered by a pinning test asserting both behaviors.
+
+## 17. Help Text Additions
+
+`stow --version` output is byte-identical to Perl's (`stow (GNU Stow) version
+2.4.1`). The `--help`/usage text keeps the same header, synopsis and option
+descriptions, but adds two attribution lines (naming this as a Python
+reimplementation and crediting the original GNU Stow authors) and points bug
+reports at this project's issue tracker instead of the GNU addresses. The
+oracle test harness normalizes exactly these known lines and nothing else.
 
 ---
 

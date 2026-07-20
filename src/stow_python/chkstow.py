@@ -19,8 +19,11 @@ class Mode(Enum):
     LIST = auto()
 
 
-# "or" (not a default argument) so an empty STOW_DIR also falls back,
-# like Perl's $ENV{STOW_DIR} || fallback
+# "or" (not a default argument) so an empty STOW_DIR also falls back.
+# Deliberately NOT like Perl chkstow's `$ENV{STOW_DIR} ||` fallback, which
+# also treats the string "0" as false: here STOW_DIR=0 names a real
+# directory, consistent with Perl stow's own `length` check.
+# See docs/perl-differences.md.
 DEFAULT_TARGET = os.environ.get("STOW_DIR") or "/usr/local/"
 
 
