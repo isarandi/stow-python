@@ -1,0 +1,119 @@
+.\" -*- mode: troff; coding: utf-8 -*-
+.\" Manual page for chkstow, written for the stow-python distribution.
+.\"
+.\" This file is part of GNU Stow.
+.\"
+.\" GNU Stow is free software: you can redistribute it and/or modify it
+.\" under the terms of the GNU General Public License as published by
+.\" the Free Software Foundation, either version 3 of the License, or
+.\" (at your option) any later version.
+.\"
+.\" GNU Stow is distributed in the hope that it will be useful, but
+.\" WITHOUT ANY WARRANTY; without even the implied warranty of
+.\" MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+.\" General Public License for more details.
+.\"
+.\" You should have received a copy of the GNU General Public License
+.\" along with this program. If not, see https://www.gnu.org/licenses/.
+.\"
+.\" \*(C` and \*(C' are quotes in nroff, nothing in troff, for use with C<>.
+.ie n \{\
+.    ds C` ""
+.    ds C' ""
+'br\}
+.el\{\
+.    ds C`
+.    ds C'
+'br\}
+.\"
+.TH chkstow 8 2026-07-20 "stow-python 2.4.1" "GNU Stow"
+.\" For nroff, turn off justification.  Always turn off hyphenation; it makes
+.\" way too many mistakes in technical documents.
+.if n .ad l
+.nh
+.SH NAME
+chkstow \- check a Stow target directory for problems
+.SH SYNOPSIS
+chkstow [ options ]
+.SH DESCRIPTION
+\&\fIchkstow\fR examines a target directory tree that is managed by
+\&\fBstow\fR\|(8) and reports stow-related problems.  It has three modes
+of operation:
+.IP \(bu 4
+reporting "bogus" symlinks, i.e. symlinks that point to files which
+do not exist (the default mode);
+.IP \(bu 4
+reporting "alien" files, i.e. files in the target tree that are
+neither symlinks nor directories, and so are not managed by Stow;
+.IP \(bu 4
+listing the names of the Stow packages that have symlinks in the
+target tree.
+.PP
+\&\fIchkstow\fR only inspects the target tree; it never modifies the
+filesystem.  While scanning, it skips any directory that contains a
+file named \fI.stow\fR or \fI.notstowed\fR (i.e. stow directories and
+directories explicitly marked as not stowed), printing a
+\&\f(CW\*(C`skipping\*(C'\fR note to standard error for each one.
+.PP
+When invoked without any arguments, \fIchkstow\fR prints a usage
+message and exits.
+.SH OPTIONS
+.IP "\-t DIR" 4
+.PD 0
+.IP \-\-target=DIR 4
+.PD
+Set the target directory to \f(CW\*(C`DIR\*(C'\fR.  The default is the
+value of the \f(CW\*(C`STOW_DIR\*(C'\fR environment variable, or
+\&\fI/usr/local/\fR if that is unset or empty.
+.IP \-b 4
+.PD 0
+.IP \-\-badlinks 4
+.PD
+Report symlinks in the target tree that point to non-existent files.
+Each is reported on standard output as \f(CW\*(C`Bogus link: PATH\*(C'\fR.
+This is the default mode.
+.IP \-a 4
+.PD 0
+.IP \-\-aliens 4
+.PD
+Report files in the target tree that are neither symlinks nor
+directories.  Each is reported on standard output as
+\&\f(CW\*(C`Unstowed file: PATH\*(C'\fR.
+.IP \-l 4
+.PD 0
+.IP \-\-list 4
+.PD
+List the Stow packages that have symlinks in the target tree.  The
+package names are derived from the symlink destinations and printed
+on standard output, one per line, in sorted order.
+.PP
+If several of \f(CW\*(C`\-\-badlinks\*(C'\fR, \f(CW\*(C`\-\-aliens\*(C'\fR and
+\&\f(CW\*(C`\-\-list\*(C'\fR are given, the last one takes effect.
+.SH ENVIRONMENT
+.IP STOW_DIR 4
+If set and non-empty, used as the default target directory in place
+of \fI/usr/local/\fR.
+.SH "SEE ALSO"
+.PP
+\&\fBstow\fR\|(8)
+.PP
+The full documentation for \fIstow\fR is maintained by the GNU Stow
+project as a Texinfo manual, also available online at
+<https://www.gnu.org/software/stow/manual/>.
+.SH AUTHOR
+This man page was written by Istvan Sarandi for stow-python, the
+Python reimplementation of GNU Stow, describing the \fIchkstow\fR
+utility distributed with GNU Stow.
+.SH COPYRIGHT
+Copyright (C) 2026 by Istvan Sarandi.
+.PP
+Permission is granted to make and distribute verbatim copies of this
+manual provided the copyright notice and this permission notice are
+preserved on all copies.
+.PP
+Permission is granted to copy and distribute modified versions of this
+manual under the conditions for verbatim copying, provided also that
+the section entitled "GNU General Public License" is included with the
+modified manual, and provided that the entire resulting derived work
+is distributed under the terms of a permission notice identical to
+this one.

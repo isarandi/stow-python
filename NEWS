@@ -1,0 +1,28 @@
+stow-python NEWS -- history of user-visible changes.
+
+* Changes in version 2.4.1 (2026)
+
+** First release of stow-python, a Python reimplementation of GNU Stow.
+
+  It runs on Python 3.10 and above with no third-party dependencies,
+  and includes both the stow and chkstow programs.
+
+** Behavior-compatible with GNU Stow 2.4.1.
+
+  Compatibility is verified by an oracle test suite that runs both
+  implementations side by side and compares return codes, byte-exact
+  stdout/stderr, resulting filesystem state, and syscall traces
+  against the Perl implementation.
+
+** Intentional divergences from the Perl implementation.
+
+  All divergences are documented in docs/perl-differences.md.
+  Notably:
+
+  - Arguments after the "--" separator are treated as package names
+    instead of being silently discarded.
+  - Empty package names and invalid option values (e.g. a
+    non-numeric --verbose level or a malformed regex) are rejected
+    with a clean error message.
+  - A Perl tree-folding bug that could delete an unrelated symlink
+    owned by the user is fixed.
