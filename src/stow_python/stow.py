@@ -1013,7 +1013,9 @@ class _Stower:
         for file_path in (local_stow_ignore, global_stow_ignore):
             if os.path.exists(file_path):
                 debug(5, 1, f"Using ignore file: {file_path}")
-                return _read_ignore_file(file_path)
+                if file_path not in self._ignore_file_cache:
+                    self._ignore_file_cache[file_path] = _read_ignore_file(file_path)
+                return self._ignore_file_cache[file_path]
             else:
                 debug(5, 1, f"{file_path} didn't exist")
 
@@ -1450,9 +1452,12 @@ class _Stower:
 # =============================================================================
 
 
-@functools.lru_cache(maxsize=None)
 def _read_ignore_file(file_path: str) -> IgnorePatterns:
-    """Read and parse ignore file, returning compiled regexps (cached)."""
+    """Read and parse ignore file, returning compiled regexps.
+
+    Caching lives in _Stower._ignore_file_cache, per stower instance:
+    file_path is relative to the target directory, so a cross-instance
+    cache could hand one tree's patterns to an operation on another."""
     try:
         with open(file_path, "r") as f:
             patterns: set[str] = set()

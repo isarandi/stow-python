@@ -343,6 +343,29 @@ class TestLibraryRobustness:
     """Pin the library-API hardening: kwargs validation, string patterns,
     per-operation ignore caching, and deep-tree traversal."""
 
+    def test_ignore_file_cache_is_per_operation(self, tmp_path):
+        """Sequential operations on different trees with the same relative
+        layout must each read their own .stow-local-ignore file."""
+        os.environ["HOME"] = str(tmp_path)
+        for name, ignored in (("a", "keepme"), ("b", "unrelated")):
+            root = tmp_path / name
+            (root / "stow" / "pkg").mkdir(parents=True)
+            (root / "target").mkdir()
+            (root / "stow" / "pkg" / ".stow-local-ignore").write_text(ignored + "\n")
+            (root / "stow" / "pkg" / "keepme").write_text("x")
+
+        result_a = stow(
+            "pkg", dir=str(tmp_path / "a" / "stow"), target=str(tmp_path / "a" / "target")
+        )
+        result_b = stow(
+            "pkg", dir=str(tmp_path / "b" / "stow"), target=str(tmp_path / "b" / "target")
+        )
+
+        assert result_a.success and result_b.success
+        # Tree a ignores keepme; tree b must NOT inherit a's cached patterns
+        assert not os.path.lexists(tmp_path / "a" / "target" / "keepme")
+        assert os.path.islink(tmp_path / "b" / "target" / "keepme")
+
     def test_deep_tree_stow_and_unstow(self, tmp_path):
         """A tree hundreds of levels deep must not hit the interpreter
         recursion limit (the planner runs on an explicit job stack)."""

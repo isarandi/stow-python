@@ -37,7 +37,6 @@ from testutil import (
 
 LOCAL_IGNORE_FILE = stow_module.LOCAL_IGNORE_FILE
 GLOBAL_IGNORE_FILE = stow_module.GLOBAL_IGNORE_FILE
-_read_ignore_file = stow_module._read_ignore_file
 
 
 def check_ignores(stow, stow_path, package, context, tests):
@@ -158,12 +157,13 @@ myprefix.+       #hi mum
 
 
 def do_setup_package_local_list(stow_path, package, contents):
-    """Set up package-local ignore list."""
+    """Set up package-local ignore list.
+
+    No cache to clear: ignore files are cached per _Stower instance, and
+    each test constructs a fresh one."""
     package_path = join_paths(stow_path, package)
     make_path(package_path)
-    package_ignore = setup_package_ignore(package_path, contents)
-    _read_ignore_file.cache_clear()
-    return package_ignore
+    return setup_package_ignore(package_path, contents)
 
 
 class TestIgnoreBuiltInList:
