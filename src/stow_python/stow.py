@@ -15,7 +15,8 @@ import functools
 import os
 import re
 import sys
-from typing import Optional, Sequence
+from contextlib import contextmanager
+from typing import Iterator, Optional, Sequence
 
 from stow_python.types import (
     Action,
@@ -42,6 +43,7 @@ from stow_python.types import (
 )
 from stow_python.util import (
     debug,
+    get_debug_level,
     set_debug_level,
     join_paths,
     parent,
@@ -51,6 +53,7 @@ from stow_python.util import (
     require_directory,
     within_dir,
     move,
+    process_lock,
 )
 
 LOCAL_IGNORE_FILE = ".stow-local-ignore"
@@ -192,22 +195,43 @@ class _Stower:
         self._defer_pats = list(config.defer)
         self._override_pats = list(config.override)
 
-        set_debug_level(config.verbose)
 
-        # Compute stow_path (relative path from target to stow dir)
-        stow_dir_abs = canon_path(config.dir)
-        target_abs = canon_path(config.target)
-        self.stow_path = os.path.relpath(stow_dir_abs, target_abs)
-        debug(2, 0, f"stow dir is {stow_dir_abs}")
-        debug(
-            2, 0, f"stow dir path relative to target {target_abs} is {self.stow_path}"
-        )
+
+        with self._session():
+            # Compute stow_path (relative path from target to stow dir)
+            stow_dir_abs = canon_path(config.dir)
+            target_abs = canon_path(config.target)
+            self.stow_path = os.path.relpath(stow_dir_abs, target_abs)
+            debug(2, 0, f"stow dir is {stow_dir_abs}")
+            debug(
+                2,
+                0,
+                f"stow dir path relative to target {target_abs} is {self.stow_path}",
+            )
 
         # State
         self.conflicts: dict[str, list[str]] = {}
         self.tasks: list[Task] = []
         self.dir_task_for: dict[str, DirTask] = {}
         self.link_task_for: dict[str, LinkTask] = {}
+
+    @contextmanager
+    def _session(self) -> Iterator[None]:
+        """Serialize a planning/execution phase and scope verbosity to it.
+
+        Phases chdir into the target tree and route debug() through a
+        process-wide verbosity level, so concurrent stow operations in one
+        process must not interleave. Callers that change the working
+        directory concurrently with a running operation are still on their
+        own (see docs/architecture.md).
+        """
+        with process_lock:
+            prev_verbosity = get_debug_level()
+            set_debug_level(self.c.verbose)
+            try:
+                yield
+            finally:
+                set_debug_level(prev_verbosity)
 
     def plan_stow(self, packages: Sequence[str]) -> None:
         """Plan stow operations for the given packages."""
@@ -218,17 +242,18 @@ class _Stower:
             if not package:
                 raise StowError("Package name cannot be empty")
 
-        debug(2, 0, f"Planning stow of: {' '.join(packages)} ...")
-        with within_dir(self.c.target, "target tree"):
-            for package in packages:
-                pkg_path = join_paths(self.stow_path, package)
-                require_directory(
-                    pkg_path,
-                    f"The stow directory {self.stow_path} does not contain package {package}",
-                )
-                debug(2, 0, f"Planning stow of package {package}...")
-                self.stow_contents(self.stow_path, package, ".", ".")
-                debug(2, 0, f"Planning stow of package {package}... done")
+        with self._session():
+            debug(2, 0, f"Planning stow of: {' '.join(packages)} ...")
+            with within_dir(self.c.target, "target tree"):
+                for package in packages:
+                    pkg_path = join_paths(self.stow_path, package)
+                    require_directory(
+                        pkg_path,
+                        f"The stow directory {self.stow_path} does not contain package {package}",
+                    )
+                    debug(2, 0, f"Planning stow of package {package}...")
+                    self.stow_contents(self.stow_path, package, ".", ".")
+                    debug(2, 0, f"Planning stow of package {package}... done")
 
     def plan_unstow(self, packages: Sequence[str]) -> None:
         """Plan unstow operations for the given packages."""
@@ -239,17 +264,18 @@ class _Stower:
             if not package:
                 raise StowError("Package name cannot be empty")
 
-        debug(2, 0, f"Planning unstow of: {' '.join(packages)} ...")
-        with within_dir(self.c.target, "target tree"):
-            for package in packages:
-                pkg_path = join_paths(self.stow_path, package)
-                require_directory(
-                    pkg_path,
-                    f"The stow directory {self.stow_path} does not contain package {package}",
-                )
-                debug(2, 0, f"Planning unstow of package {package}...")
-                self.unstow_contents(package, ".", ".")
-                debug(2, 0, f"Planning unstow of package {package}... done")
+        with self._session():
+            debug(2, 0, f"Planning unstow of: {' '.join(packages)} ...")
+            with within_dir(self.c.target, "target tree"):
+                for package in packages:
+                    pkg_path = join_paths(self.stow_path, package)
+                    require_directory(
+                        pkg_path,
+                        f"The stow directory {self.stow_path} does not contain package {package}",
+                    )
+                    debug(2, 0, f"Planning unstow of package {package}...")
+                    self.unstow_contents(package, ".", ".")
+                    debug(2, 0, f"Planning unstow of package {package}... done")
 
     def execute(self) -> StowResult:
         """Execute planned tasks and return result.
@@ -280,19 +306,20 @@ class _Stower:
 
     def process_tasks(self) -> None:
         """Process each task in the tasks list."""
-        debug(2, 0, "Processing tasks...")
+        with self._session():
+            debug(2, 0, "Processing tasks...")
 
-        # Strip out all tasks with a skip action
-        self.tasks = [t for t in self.tasks if not t.skipped]
+            # Strip out all tasks with a skip action
+            self.tasks = [t for t in self.tasks if not t.skipped]
 
-        if not self.tasks:
-            return
+            if not self.tasks:
+                return
 
-        with within_dir(self.c.target, "target tree"):
-            for task in self.tasks:
-                self._process_task(task)
+            with within_dir(self.c.target, "target tree"):
+                for task in self.tasks:
+                    self._process_task(task)
 
-        debug(2, 0, "Processing tasks... done")
+            debug(2, 0, "Processing tasks... done")
 
     def stow_contents(
         self, stow_path: str, package: str, pkg_subdir: str, target_subdir: str

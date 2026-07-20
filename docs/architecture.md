@@ -74,6 +74,16 @@ Configuration class with the following fields:
 | `ignore` | tuple[re.Pattern, ...] | () | Compiled regex patterns to ignore |
 | `defer` | tuple[re.Pattern, ...] | () | Compiled regex patterns to defer to other packages |
 | `override` | tuple[re.Pattern, ...] | () | Compiled regex patterns to override other packages |
+### Process-Global State and Threading
+
+Planning and execution `chdir()` into the target tree, mirroring Perl stow's
+behavior and syscall sequence, and debug verbosity is applied process-wide
+for the duration of an operation. A process-wide re-entrant lock serializes
+these phases, so calling `stow()`/`unstow()`/`restow()` concurrently from
+multiple threads is safe but serialized. What the lock cannot protect
+against is *other* code in the host application depending on or changing
+the current working directory while an operation runs — do not run stow
+operations concurrently with cwd-sensitive code.
 
 ### StowResult
 

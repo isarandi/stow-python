@@ -18,11 +18,18 @@ import os
 import re
 import stat
 import sys
+import threading
 
 from stow_python.types import StowError
 
 VERSION = "2.4.1"
 PROGRAM_NAME = "stow"
+
+# Planning and execution chdir into the target tree (mirroring Perl stow's
+# syscall sequence), which is process-global state; this lock serializes
+# concurrent stow operations within one process. Re-entrant so that nested
+# phases of one operation can each take it.
+process_lock = threading.RLock()
 
 # --- Logging setup ---
 
@@ -69,6 +76,11 @@ def require_directory(path: str, msg: str) -> None:
 def set_debug_level(level: int) -> None:
     """Set verbosity level for debug()."""
     _verbosity_filter.verbosity = level
+
+
+def get_debug_level() -> int:
+    """Return the current verbosity level for debug()."""
+    return _verbosity_filter.verbosity
 
 
 def debug(level: int, indent: int, msg: str) -> None:
