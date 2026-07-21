@@ -123,7 +123,9 @@ class TestChkstowBoth:
         assert_chkstow_match(chkstow_env, ["-l", "-t", "."])
         # Additional check: verify expected packages listed
         _, stdout, _ = chkstow_env.run_python_chkstow(["-l", "-t", "."])
-        assert re.search(r"emacs\nperl\nstow\n", stdout), f"Expected package list, got: {stdout}"
+        assert re.search(r"emacs\nperl\nstow\n", stdout), (
+            f"Expected package list, got: {stdout}"
+        )
 
     def test_no_bogus_links(self, chkstow_env):
         r"""Bad links check with no bad links.
@@ -151,7 +153,9 @@ class TestChkstowBoth:
         chkstow_env.create_target_file("bin/alien", "alien file")
         assert_chkstow_match(chkstow_env, ["-a", "-t", "."])
         _, stdout, _ = chkstow_env.run_python_chkstow(["-a", "-t", "."])
-        assert re.search(r"Unstowed file: \./bin/alien", stdout), f"Expected alien detection, got: {stdout}"
+        assert re.search(r"Unstowed file: \./bin/alien", stdout), (
+            f"Expected alien detection, got: {stdout}"
+        )
 
     def test_detect_bogus_link(self, chkstow_env):
         """Bad links check with broken symlink.
@@ -162,7 +166,9 @@ class TestChkstowBoth:
         os.symlink("ireallyhopethisfiledoesn/t.exist", bad_link)
         assert_chkstow_match(chkstow_env, ["-b", "-t", "."])
         _, stdout, _ = chkstow_env.run_python_chkstow(["-b", "-t", "."])
-        assert re.search(r"Bogus link: \./bin/link", stdout), f"Expected bogus link detection, got: {stdout}"
+        assert re.search(r"Bogus link: \./bin/link", stdout), (
+            f"Expected bogus link detection, got: {stdout}"
+        )
 
     def test_skip_stow_directories(self, chkstow_env):
         """Skip directories containing .stow marker.
@@ -171,7 +177,9 @@ class TestChkstowBoth:
         """
         assert_chkstow_match(chkstow_env, ["-b", "-t", "."])
         _, _, stderr = chkstow_env.run_python_chkstow(["-b", "-t", "."])
-        assert re.search(r"skipping.*stow", stderr, re.IGNORECASE), f"Expected skip warning, got stderr: {stderr}"
+        assert re.search(r"skipping.*stow", stderr, re.IGNORECASE), (
+            f"Expected skip warning, got stderr: {stderr}"
+        )
 
 
 class TestChkstowSymlinkTarget:
@@ -201,3 +209,85 @@ class TestChkstowSymlinkTarget:
         rc, stdout, stderr = chkstow_env.run_perl_chkstow(["-a", "-t", link])
         assert rc == 0
         assert stdout.strip() == ""
+
+
+class TestChkstowGetoptLongBoth:
+    """chkstow's option parser reproduces Getopt::Long's DEFAULT
+    configuration (unlike stow's parser): case-insensitive long options,
+    unique-prefix abbreviation, '+' option prefixes, and stderr warnings
+    for bad options followed by usage on stdout with exit 0. Everything
+    here is asserted equal against the Perl oracle.
+    """
+
+    def _make_bogus_link(self, stow_env):
+        stow_env.create_target_link("bogus", "nonexistent-dest")
+
+    def test_abbreviated_and_case_insensitive_long_options(self, stow_env):
+        self._make_bogus_link(stow_env)
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["--bad", "-t", "."])
+        assert rc == 0 and "Bogus link:" in stdout
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["--tar", ".", "-b"])
+        assert "Bogus link:" in stdout
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["--BADLINKS", "-t", "."])
+        assert "Bogus link:" in stdout
+
+    def test_plus_prefix_getopt_compat(self, stow_env):
+        self._make_bogus_link(stow_env)
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["+b", "-t", "."])
+        assert rc == 0 and "Bogus link:" in stdout
+
+    def test_unknown_option_warns_then_usage(self, stow_env):
+        self._make_bogus_link(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-x", "-t", "."])
+        assert rc == 0
+        assert "Unknown option: x" in stderr
+        assert "USAGE:" in stdout
+
+    def test_missing_option_value_warns_then_usage(self, stow_env):
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t"])
+        assert rc == 0
+        assert "requires an argument" in stderr
+        assert "USAGE:" in stdout
+
+    def test_flag_with_attached_value_rejected(self, stow_env):
+        self._make_bogus_link(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["--badlinks=1", "-t", "."])
+        assert rc == 0
+        assert "USAGE:" in stdout
+
+    def test_non_option_arguments_ignored(self, stow_env):
+        """Perl chkstow leaves non-option args in @ARGV and never reads
+        them; the scan still runs on the -t target."""
+        self._make_bogus_link(stow_env)
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["foo", "-b", "-t", "."])
+        assert rc == 0 and "Bogus link:" in stdout
+
+    def test_posixly_correct_disables_abbreviation(self, stow_env):
+        self._make_bogus_link(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(
+            stow_env, ["--bad", "-t", "."], env={"POSIXLY_CORRECT": "1"}
+        )
+        assert rc == 0
+        assert "Unknown option: bad" in stderr
+        assert "USAGE:" in stdout
+
+    def test_posixly_correct_disables_plus_and_stops_at_non_option(self, stow_env):
+        """Under POSIXLY_CORRECT, '+b' is not an option: it becomes the
+        first non-option argument, require_order stops parsing there, and
+        the scan runs on the default target in badlinks mode. STOW_DIR
+        points the default at the local tree, never /usr/local."""
+        self._make_bogus_link(stow_env)
+        rc, stdout, _ = assert_chkstow_match(
+            stow_env, ["+b"], env={"POSIXLY_CORRECT": "1", "STOW_DIR": "."}
+        )
+        assert rc == 0 and "Bogus link:" in stdout
+
+    def test_file_target_checked_as_single_entry(self, stow_env):
+        """File::Find semantics for a non-directory target: the file
+        itself is checked once, named './x' for a bare relative name."""
+        stow_env.create_target_file("plainfile", "y")
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["-t", "plainfile", "-a"])
+        assert rc == 0
+        assert stdout == "Unstowed file: ./plainfile\n"
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["-t", "./plainfile", "-a"])
+        assert stdout == "Unstowed file: ./plainfile\n"
