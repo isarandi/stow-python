@@ -32,6 +32,13 @@ PROGRAM_NAME = "stow"
 process_lock = threading.RLock()
 
 # --- Logging setup ---
+#
+# The "stow" logger gets its handler at import time with propagate=False.
+# This is deliberate: the debug() stream must reach stderr in Perl-stow's
+# exact format even for pure library use (Perl's Stow.pm prints the same
+# way), and must never be reformatted by an embedding application's root
+# logger config. Embedders who want the output elsewhere can replace the
+# handlers on logging.getLogger("stow").
 
 
 class _VerbosityFilter(logging.Filter):
@@ -126,7 +133,11 @@ def join_paths(*paths: str) -> str:
 
     debug(6, 5, f"| Joined: {result}")
 
+    # normpath() covers both of Perl's steps here (canonpath plus the
+    # explicit foo/.. removal loop), so the intermediate debug line shows
+    # the same value as the final one.
     result = os.path.normpath(result)
+    debug(6, 5, f"| After .. removal: {result}")
     debug(5, 5, f"| Final join: {result}")
 
     return result

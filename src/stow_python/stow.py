@@ -409,11 +409,13 @@ class _Stower:
         cwd = os.getcwd()
         msg = f"Stowing contents of {stow_path} / {package} / {pkg_subdir} (cwd={cwd})"
 
-        # Replace $HOME with ~ for readability
+        # Replace $HOME with ~ for readability. Like Perl's
+        # s!$ENV{HOME}(/|$)!~$1!g: only before a slash or at the end of the
+        # message, so e.g. a "(cwd=$HOME)" suffix stays untouched and a
+        # sibling path like ${HOME}2 is never mangled to ~2.
         home = os.environ.get("HOME", "")
         if home:
-            msg = msg.replace(home + "/", "~/")
-            msg = msg.replace(home, "~")
+            msg = re.sub(re.escape(home) + r"(/|$)", r"~\1", msg)
 
         debug(3, 0, msg)
         debug(4, 1, f"target subdir is {target_subdir}")
@@ -1193,7 +1195,9 @@ class _Stower:
         segments = [s for s in pkg_path_from_cwd.split("/") if s]
 
         for last_segment in range(len(segments)):
-            path_so_far = "/".join(segments[: last_segment + 1])
+            # join_paths (not a plain "/".join) so its verbose-mode debug
+            # lines appear here just like in Perl's prefix loop
+            path_so_far = join_paths(*segments[: last_segment + 1])
             debug(5, 5, f"is {path_so_far} marked stow dir?")
             if self._is_marked_stow_dir(path_so_far):
                 if last_segment == len(segments) - 1:
@@ -1213,7 +1217,9 @@ class _Stower:
             return None
         action = self.link_task_for[path].action
         debug(
-            4, 4, f"| link_task_action({path}): task exists with action {action.value}"
+            4,
+            1,
+            f"link_task_action({path}): link task exists with action {action.value}",
         )
         return action
 
@@ -1224,7 +1230,9 @@ class _Stower:
             return None
         action = self.dir_task_for[path].action
         debug(
-            4, 4, f"| dir_task_action({path}): task exists with action {action.value}"
+            4,
+            4,
+            f"| dir_task_action({path}): dir task exists with action {action.value}",
         )
         return action
 

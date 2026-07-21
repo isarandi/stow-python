@@ -565,7 +565,11 @@ def expand_environment_variables(path: str, source: str) -> str:
                 f"{source} references undefined environment variable ${var}; aborting!"
             )
 
-    path = re.sub(r"(?<!\\)\$\{([^}]+)}", replace_var, path)
+    # Braced form: Perl stow only expands ${NAME} when the braces contain
+    # word/space characters ([\w\s]+), so shell-isms like ${VAR:-default}
+    # stay literal instead of being looked up (and failing) as a variable
+    # named "VAR:-default".
+    path = re.sub(r"(?<!\\)\$\{([\w\s]+)}", replace_var, path)
     path = re.sub(r"(?<!\\)\$(\w+)", replace_var, path)
     path = path.replace("\\$", "$")
 
