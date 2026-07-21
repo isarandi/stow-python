@@ -1,0 +1,9 @@
+include NEWS
+include AUTHORS
+include CONTRIBUTING.md
+include docs/*.md
+include docs/stow.texi
+include docs/man/*.8
+include scripts/build_single_file.py
+recursive-include tests *.py *.sh
+prune tests/gnu_stow_for_testing

@@ -2,10 +2,25 @@ name: Release
 
 on:
   release:
-    types: [created]
+    types: [published]
 
 jobs:
+  check-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify release tag matches pyproject.toml version
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          tag='${{ github.event.release.tag_name }}'
+          if [ "$tag" != "v$version" ]; then
+            echo "Release tag '$tag' does not match pyproject.toml version 'v$version'" >&2
+            exit 1
+          fi
+
   test:
+    needs: check-tag
     runs-on: ubuntu-latest
     strategy:
       matrix:

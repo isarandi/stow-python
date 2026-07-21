@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [pythonic]
   pull_request:
-    branches: [main]
+    branches: [pythonic]
+  workflow_dispatch:
 
 jobs:
   download-stow:
@@ -40,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +50,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Install package under test
+        run: pip install -e .
 
       - name: Install test dependencies
         run: pip install pytest hypothesis
@@ -62,7 +66,7 @@ jobs:
       - name: Fix permissions
         run: chmod +x tests/gnu_stow_for_testing/bin/*
 
-      # The syscall-comparison layer skips without strace; CI must never
+      # The syscall-comparison layer skips without strace; Linux CI must never
       # run in that degraded mode, so fail hard if strace is missing.
       - name: Ensure strace is available
         run: |
@@ -70,6 +74,40 @@ jobs:
           strace --version
 
       - name: Run tests
+        run: pytest tests/ -v
+
+  test-macos:
+    name: Test macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package under test
+        run: pip install -e .
+
+      - name: Install test dependencies
+        run: pip install pytest hypothesis
+
+      # The oracle build script uses GNU sed's -i syntax; put GNU sed
+      # first in PATH so the same script works unchanged on macOS.
+      - name: Install GNU sed
+        run: |
+          brew install gnu-sed
+          echo "$(brew --prefix gnu-sed)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Download and build GNU Stow
+        run: |
+          cd tests
+          ./get_gnu_stow_for_testing_identical_behavior.sh
+
+      # No strace exists on macOS: the harness still runs all non-syscall
+      # comparison layers and loudly skips only the syscall layer.
+      - name: Run tests (without strace)
         run: pytest tests/ -v
 
   lint:
@@ -84,13 +122,25 @@ jobs:
           python-version: "3.12"
 
       - name: Install tools
-        run: pip install ruff mypy
+        run: pip install ruff==0.14.10 mypy==1.19.1
 
       - name: Type check with mypy
-        run: mypy src/stow_python/ --ignore-missing-imports
+        run: mypy src/
 
       - name: Lint with ruff
         run: ruff check src/ tests/ scripts/
 
       - name: Check formatting with ruff
-        run: ruff format --check src/stow_python/
+        run: ruff format --check src/ tests/ scripts/
+
+  docs:
+    name: Validate Texinfo manual
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install texinfo
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq texinfo
+
+      - name: Validate docs/stow.texi
+        run: makeinfo --no-split -o /dev/null docs/stow.texi

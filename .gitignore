@@ -21,4 +21,10 @@ venv/
 # IDE
 .idea/
 .vscode/
+
+# Generated single-file artifacts, rebuilt by scripts/build_single_file.py
+# and the test session fixture
 bin/
+
+# Zero-dependency project: the lockfile is local noise
+uv.lock
