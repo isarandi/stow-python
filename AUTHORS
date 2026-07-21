@@ -1,0 +1,21 @@
+Authors of Stow-Python.
+
+Stow-Python is a Python reimplementation of GNU Stow and constitutes
+derivative work of it.  The original GNU Stow was written and
+maintained by:
+
+  Bob Glickstein <bobg+stow@zanshin.com> (1993-1996)
+      Original author of GNU Stow.
+
+  Guillaume Morin <gmorin@gnu.org> (2000-2001)
+      Maintainer.
+
+  Kahlil Hodgson <kahlil.hodgson@dpi.vic.gov.au> (2007)
+      Maintainer.
+
+  Adam Spiers <stow@adamspiers.org> (2011-)
+      Maintainer, together with the GNU Stow contributors.
+
+The Python reimplementation was written by:
+
+  Istvan Sarandi <istvan.sarandi@gmail.com>

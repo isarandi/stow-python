@@ -368,7 +368,8 @@ lost. Note that by this definition, Stow doesn't "own" anything
 If Stow needs to create a directory or a symlink in the target tree
 and it cannot because that name is already in use and is not owned by
 Stow, then a conflict has arisen. See the "Conflicts" section in the
-info manual.
+Stow-Python info manual, \fIstow\-python.info\fR (built from
+\&\fIdocs/stow.texi\fR in the source distribution).
 .SH "DELETING PACKAGES"
 .IX Header "DELETING PACKAGES"
 When the \f(CW\*(C`\-D\*(C'\fR option is given, the action of Stow is to delete a
@@ -379,7 +380,7 @@ the stow directory or discarding the package tree.
 To delete a package, Stow recursively scans the target tree, skipping
 over the stow directory (since that is usually a subdirectory of the
 target tree) and any other stow directories it encounters (see
-"Multiple stow directories" in the info manual). Any symlink it
+"Multiple stow directories" in the info manual, \fIstow\-python.info\fR). Any symlink it
 finds that points into the package being deleted is removed. Any
 directory that contained only symlinks to the package being deleted is
 removed. Any directory that, after removing symlinks and empty
@@ -407,8 +408,8 @@ options that take a file path.
 The options \fI\-D\fR, \fI\-R\fR, \fI\-S\fR, and any packages listed in the resource
 file are ignored.
 .PP
-See the info manual for more information on how stow handles resource
-file.
+See the info manual (\fIstow\-python.info\fR) for more information on how
+stow handles resource file.
 .SH "SEE ALSO"
 .IX Header "SEE ALSO"
 The full documentation for \fIstow\fR is maintained by the GNU Stow

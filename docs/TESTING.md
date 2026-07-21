@@ -78,6 +78,29 @@ Run identical scenarios on both Python and Perl, compare everything.
    - mtime/atime/ctime (timestamps)
    - inode numbers
 
+### Comparison guarantees and caveats
+
+Precisely what the oracle comparison does and does not guarantee:
+
+- **Output comparison** (stdout and stderr) is byte-exact modulo
+  exactly three documented normalizations:
+  1. Stow-Python branding lines are rewritten (program name/version
+     lines differ between the two implementations by design).
+  2. Perl's newline-in-filename warnings are filtered from both sides.
+  3. Undecodable bytes are replaced during UTF-8 decoding.
+- **Tree-state snapshot** covers entry types, file content bytes,
+  symlink destinations, permissions, and ownership — but NOT mtimes
+  (the two runs create their trees at different times, so absolute
+  mtimes are incomparable by construction) and NOT xattrs.
+- **Syscall comparison** checks syscall name, path arguments, results,
+  and order — but not `open()` flag arguments or `mkdir()` mode
+  arguments. Interpreter-level differences (e.g. `O_CLOEXEC`) would
+  drown the signal there; the tree-state comparison covers the effects
+  of those arguments.
+- On machines without strace, all non-syscall comparison layers still
+  run and only the syscall layer is (loudly) skipped. CI hard-requires
+  strace on Linux.
+
 ### Real-World Scenarios to Test
 
 #### Dotfiles Management

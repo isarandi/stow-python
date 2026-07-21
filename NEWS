@@ -1,5 +1,51 @@
 stow-python NEWS -- history of user-visible changes.
 
+Version numbers X.Y.Z mirror the GNU Stow version whose behavior is
+reproduced; the .postN suffix counts stow-python releases on top of it.
+
+* Changes in version 2.4.1.post1 (2026-07-21)
+
+** chkstow now matches Perl's option and target handling exactly.
+
+  Option parsing reproduces Getopt::Long's default behavior:
+  unambiguous abbreviation of long options, case-insensitive long
+  options, "+" option prefixes, and warnings on stderr for unknown or
+  ambiguous options.  Nonexistent and non-directory targets are now
+  handled the way File::Find handles them.
+
+** Single-file build script rewritten around the AST.
+
+  The bundler now operates on the parsed AST and verifies its output
+  after every build by compiling it and running a smoke test.  This
+  fixes a NameError crash in the previously shipped bin/stow on the
+  error path taken when a package is not a directory.
+
+** Fixes to simulation, rc files and verbose output.
+
+  - In simulate mode, StowResult.tasks no longer reports tasks that
+    were internally reverted.
+  - ${VAR} expansion in .stowrc files now matches Perl's rule that
+    brace-delimited names consist of word and whitespace characters
+    ([\w\s]).
+  - Debug output at verbose levels 4-5 now byte-matches the Perl
+    implementation, except for documented lines.
+
+** Documentation and licensing.
+
+  - A Texinfo manual was added (docs/stow.texi), adapted for
+    Stow-Python from the GNU Stow manual.
+  - Every source file now carries a GNU-conformant license header
+    with the upstream copyright chain.
+  - AUTHORS and CONTRIBUTING.md files were added; man pages for stow
+    and chkstow are included.
+
+** Packaging and CI.
+
+  - The sdist now ships NEWS, the man pages, and the complete
+    runnable test suite.
+  - CI now runs on the product branch and installs the package under
+    test before running the test suite.
+
 * Changes in version 2.4.1 (2026)
 
 ** First release of stow-python, a Python reimplementation of GNU Stow.
