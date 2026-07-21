@@ -43,7 +43,6 @@ from stow_python.types import (
     StowResult,
     StowError,
     StowInternalError,
-    StowConflictError,
     StowCLIError,
 )
 from stow_python.util import VERSION as __version__
@@ -59,7 +58,6 @@ __all__ = [
     "StowResult",
     "StowError",
     "StowInternalError",
-    "StowConflictError",
     "StowCLIError",
     "__version__",
     "main",

@@ -11,6 +11,7 @@ as well as the internal _Stower class that handles planning and execution.
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import os
 import re
@@ -132,46 +133,24 @@ def restow(
 
 
 def _make_config(config: Optional[StowConfig], **kwargs) -> StowConfig:
-    """Create a StowConfig from optional base config and overrides."""
-    if config is None:
-        merged = StowConfig(
-            dir=kwargs.pop("dir", "."),
-            target=kwargs.pop("target", None),
-            dotfiles=kwargs.pop("dotfiles", False),
-            adopt=kwargs.pop("adopt", False),
-            no_folding=kwargs.pop("no_folding", False),
-            simulate=kwargs.pop("simulate", False),
-            verbose=kwargs.pop("verbose", 0),
-            compat=kwargs.pop("compat", False),
-            ignore=tuple(kwargs.pop("ignore", ())),
-            defer=tuple(kwargs.pop("defer", ())),
-            override=tuple(kwargs.pop("override", ())),
-        )
-    elif kwargs:
-        # Merge base config with overrides
-        merged = StowConfig(
-            dir=kwargs.pop("dir", config.dir),
-            target=kwargs.pop("target", config.target),
-            dotfiles=kwargs.pop("dotfiles", config.dotfiles),
-            adopt=kwargs.pop("adopt", config.adopt),
-            no_folding=kwargs.pop("no_folding", config.no_folding),
-            simulate=kwargs.pop("simulate", config.simulate),
-            verbose=kwargs.pop("verbose", config.verbose),
-            compat=kwargs.pop("compat", config.compat),
-            ignore=tuple(kwargs.pop("ignore", config.ignore)),
-            defer=tuple(kwargs.pop("defer", config.defer)),
-            override=tuple(kwargs.pop("override", config.override)),
-        )
-    else:
-        return config
+    """Create a StowConfig from optional base config and overrides.
 
-    if kwargs:
-        # A typo'd option name (e.g. adpot=True) must not silently change
-        # behavior, especially for safety-relevant flags like adopt/simulate
-        raise TypeError(
-            f"unexpected configuration option(s): {', '.join(sorted(kwargs))}"
-        )
-    return merged
+    A typo'd option name (e.g. adpot=True) must not silently change
+    behavior, especially for safety-relevant flags like adopt/simulate;
+    both construction and replace() below raise TypeError for unknown
+    field names.
+    """
+    field_names = {f.name for f in dataclasses.fields(StowConfig)}
+    if unknown := sorted(set(kwargs) - field_names):
+        raise TypeError(f"unexpected configuration option(s): {', '.join(unknown)}")
+    for pattern_option in ("ignore", "defer", "override"):
+        if pattern_option in kwargs:
+            kwargs[pattern_option] = tuple(kwargs[pattern_option])
+    if config is None:
+        return StowConfig(**kwargs)
+    if not kwargs:
+        return config
+    return dataclasses.replace(config, **kwargs)
 
 
 _PATTERN_TEMPLATES = {
@@ -181,7 +160,7 @@ _PATTERN_TEMPLATES = {
 }
 
 
-def _compile_option_pattern(pattern: str, option: str) -> re.Pattern:
+def _compile_option_pattern(pattern: str, option: str) -> re.Pattern[str]:
     """Anchor and compile a user-supplied ignore/defer/override pattern.
 
     Mirrors Perl stow's wrapping of the raw option value: --ignore matches
@@ -327,10 +306,13 @@ class _Stower:
             )
 
         if self.c.simulate:
+            # Report only the tasks a real run would perform: process_tasks()
+            # strips tasks that planning marked as skipped, so the simulated
+            # task list must strip them too.
             return StowResult(
                 success=True,
                 conflicts={},
-                tasks=list(self.tasks),
+                tasks=[t for t in self.tasks if not t.skipped],
             )
 
         self.process_tasks()

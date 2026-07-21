@@ -11,6 +11,7 @@ structures used throughout stow-python.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -35,18 +36,6 @@ class StowInternalError(StowError):
     """Internal error indicating a bug in stow."""
 
     def __init__(self, message: str):
-        super().__init__(message, errno=1)
-
-
-class StowConflictError(StowError):
-    """Error raised when stow operations would cause conflicts.
-
-    Attributes:
-        conflicts: Dict mapping package names to lists of conflict messages
-    """
-
-    def __init__(self, message: str, conflicts: dict[str, list[str]]):
-        self.conflicts = conflicts
         super().__init__(message, errno=1)
 
 
@@ -181,10 +170,11 @@ class MarkedStowDir:
 class IgnorePatterns:
     """Compiled ignore patterns from stow ignore files."""
 
-    default_regexp: Optional[re.Pattern]
-    local_regexp: Optional[re.Pattern]
+    default_regexp: Optional[re.Pattern[str]]
+    local_regexp: Optional[re.Pattern[str]]
 
 
+@dataclass(frozen=True)
 class StowConfig:
     """Configuration for stow operations.
 
@@ -192,42 +182,37 @@ class StowConfig:
     them on the command line; anchoring (--ignore matches at the end of a
     path, --defer/--override at the start) and compilation happen inside
     the stower, so library callers and the CLI get identical semantics.
+
+    An empty target (the default; None is tolerated too) is replaced by
+    the parent of the stow dir.
     """
 
-    def __init__(
-        self,
-        dir: str = ".",
-        target: Optional[str] = None,
-        dotfiles: bool = False,
-        adopt: bool = False,
-        no_folding: bool = False,
-        simulate: bool = False,
-        verbose: int = 0,
-        compat: bool = False,
-        ignore: tuple[str, ...] = (),
-        defer: tuple[str, ...] = (),
-        override: tuple[str, ...] = (),
-    ):
-        import os
+    dir: str = "."
+    target: str = ""
+    dotfiles: bool = False
+    adopt: bool = False
+    no_folding: bool = False
+    simulate: bool = False
+    verbose: int = 0
+    compat: bool = False
+    ignore: tuple[str, ...] = ()
+    defer: tuple[str, ...] = ()
+    override: tuple[str, ...] = ()
 
-        self.dir = dir
-        self.target: str = (
-            target if target else (os.path.dirname(dir.rstrip("/")) or ".")
-        )
-        self.dotfiles = dotfiles
-        self.adopt = adopt
-        self.no_folding = no_folding
-        self.simulate = simulate
-        self.verbose = verbose
-        self.compat = compat
-        self.ignore = ignore
-        self.defer = defer
-        self.override = override
+    def __post_init__(self) -> None:
+        if not self.target:
+            derived = os.path.dirname(self.dir.rstrip("/")) or "."
+            object.__setattr__(self, "target", derived)
 
 
 @dataclass
 class StowResult:
-    """Result of a stow/unstow/restow operation."""
+    """Result of a stow/unstow/restow operation.
+
+    tasks holds the filesystem changes that were performed, or in simulate
+    mode would have been performed; tasks that were planned but then
+    reverted during planning are excluded in both cases.
+    """
 
     success: bool
     conflicts: dict[str, list[str]]  # Empty if success

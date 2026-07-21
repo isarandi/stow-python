@@ -132,7 +132,7 @@ def _main() -> None:
     # Build StowConfig from parsed options
     config = StowConfig(
         dir=options.get("dir", "."),
-        target=options.get("target"),
+        target=options.get("target") or "",
         dotfiles=options.get("dotfiles", False),
         adopt=options.get("adopt", False),
         no_folding=options.get("no-folding", False),
