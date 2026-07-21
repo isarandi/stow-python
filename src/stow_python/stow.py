@@ -1,6 +1,26 @@
-# Stow-Python - Python reimplementation of GNU Stow
-# Copyright (C) 2025 Istvan Sarandi
+# Stow-Python - manage farms of symbolic links
+# Python reimplementation of GNU Stow, and a derivative work of it.
+#
+# Copyright (C) 1993, 1994, 1995, 1996 by Bob Glickstein
+# Copyright (C) 2000, 2001 Guillaume Morin
+# Copyright (C) 2007 Kahlil Hodgson
+# Copyright (C) 2011 Adam Spiers
+# Copyright (C) 2025, 2026 Istvan Sarandi
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Stow-Python is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Stow-Python is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see https://www.gnu.org/licenses/.
 
 """
 Core stow operations - manage farms of symbolic links.
