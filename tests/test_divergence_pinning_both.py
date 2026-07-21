@@ -41,17 +41,13 @@ class TestDocumentedDivergences:
         stow_env.create_package("pkg", {"file": "content"})
 
         stow_env.reset_target()
-        rc, stdout, stderr = stow_env.run_python_stow(
-            ["-t", stow_env.target_dir, ""]
-        )
+        rc, stdout, stderr = stow_env.run_python_stow(["-t", stow_env.target_dir, ""])
         assert rc != 0, "Python must reject an empty package name"
         assert "empty" in stderr.lower()
         check_not_exists(stow_env, "file")
 
         stow_env.reset_target()
-        rc, stdout, stderr = stow_env.run_perl_stow(
-            ["-t", stow_env.target_dir, ""]
-        )
+        rc, stdout, stderr = stow_env.run_perl_stow(["-t", stow_env.target_dir, ""])
         assert rc == 0, f"Perl stows the '' package: {stderr}"
         # Perl linked the stow dir's contents (the pkg directory) into target
         assert os.path.islink(os.path.join(stow_env.target_dir, "pkg"))
@@ -77,14 +73,10 @@ class TestDocumentedDivergences:
 
         stow_env.reset_target()
         stow_env.create_target_dir("\n")
-        rc, stdout, stderr = stow_env.run_perl_stow(
-            ["-t", stow_env.target_dir, "pkg"]
-        )
+        rc, stdout, stderr = stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg"])
         assert rc == 0, f"Perl stow failed: {stderr}"
         # Perl's ignore check malfunctioned: the link exists
-        assert os.path.islink(
-            os.path.join(stow_env.target_dir, "\n", "backup~")
-        )
+        assert os.path.islink(os.path.join(stow_env.target_dir, "\n", "backup~"))
 
     def test_newline_warnings_only_from_perl(self, stow_env):
         """perl-differences.md #4: Perl warns on failed stat of a name
@@ -99,9 +91,7 @@ class TestDocumentedDivergences:
         assert "Unsuccessful" not in stderr
 
         stow_env.reset_target()
-        rc, stdout, stderr = stow_env.run_perl_stow(
-            ["-t", stow_env.target_dir, "pkg"]
-        )
+        rc, stdout, stderr = stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg"])
         assert rc == 0, f"Perl stow failed: {stderr}"
         assert "Unsuccessful" in stderr, "Perl should warn about the newline"
 
@@ -158,9 +148,7 @@ class TestDocumentedDivergences:
         stow_env.create_package("pkg", {"file": "content"})
 
         stow_env.reset_target()
-        prc, _, perr = stow_env.run_perl_stow(
-            ["-t", stow_env.target_dir, "-é", "pkg"]
-        )
+        prc, _, perr = stow_env.run_perl_stow(["-t", stow_env.target_dir, "-é", "pkg"])
         stow_env.reset_target()
         yrc, _, yerr = stow_env.run_python_stow(
             ["-t", stow_env.target_dir, "-é", "pkg"]
@@ -180,9 +168,7 @@ class TestDocumentedDivergences:
         stow_env.create_package("pkg", {"file": "content"})
 
         stow_env.reset_target()
-        prc, _, perr = stow_env.run_perl_stow(
-            ["-t", stow_env.target_dir, "+v", "pkg"]
-        )
+        prc, _, perr = stow_env.run_perl_stow(["-t", stow_env.target_dir, "+v", "pkg"])
         assert prc == 0, f"Perl should treat +v as -v: {perr}"
         assert os.path.islink(os.path.join(stow_env.target_dir, "file"))
 
@@ -264,3 +250,174 @@ class TestDocumentedDivergences:
         assert prc == 0 and yrc == 0
         assert "0/bogus" in yout, "Python scans ./0 and reports the dangling link"
         assert "0/bogus" not in pout, "Perl fell back to /usr/local, never saw ./0"
+
+
+class TestExitCodeAndWarningDivergences:
+    """Pins for perl-differences.md #13 and #18-#23."""
+
+    def test_package_is_file_exit_codes(self, stow_env):
+        """#13: the package path exists but is a plain file.
+
+        Both sides print the identical 'does not contain package' error;
+        Perl exits with its leftover $! (ENOENT=2 from probing the absent
+        .stowrc files earlier in the run), Python with the semantically
+        correct ENOTDIR=20. Covers both the stow and unstow planners.
+        """
+        stow_env.create_package("pkg", {"file": "content"})
+        with open(os.path.join(stow_env.stow_dir, "pkgfile"), "w") as f:
+            f.write("not a directory")
+
+        for action_args in ([], ["-D"]):
+            stow_env.reset_target()
+            prc, _, perr = stow_env.run_perl_stow(
+                ["-t", stow_env.target_dir] + action_args + ["pkgfile"]
+            )
+            stow_env.reset_target()
+            yrc, _, yerr = stow_env.run_python_stow(
+                ["-t", stow_env.target_dir] + action_args + ["pkgfile"]
+            )
+            assert "does not contain package pkgfile" in perr
+            assert perr == yerr, f"stderr must be identical: {perr!r} vs {yerr!r}"
+            assert "Traceback" not in yerr
+            assert prc == 2, "Perl: leftover ENOENT from the .stowrc probes"
+            assert yrc == 20, "Python: ENOTDIR, the check that actually failed"
+
+    def test_die_exit_codes_slash_package(self, stow_env):
+        """#13: 'stow a/b' exits 2 (no rc file) or 255 (rc file present)
+        in Perl — whatever $! happens to hold — and always 1 in Python."""
+        stow_env.create_package("pkg", {"file": "content"})
+
+        prc, _, perr = stow_env.run_perl_stow(["-t", stow_env.target_dir, "a/b"])
+        yrc, _, yerr = stow_env.run_python_stow(["-t", stow_env.target_dir, "a/b"])
+        assert "Slashes are not permitted" in perr
+        assert "Slashes are not permitted" in yerr
+        assert prc == 2, "Perl: ENOENT left over from probing absent .stowrc"
+        assert yrc == 1
+
+        # When the LAST rc-file probe succeeds, $! is clean and Perl's die
+        # falls back to 255; Python is unaffected. Perl probes ~/.stowrc
+        # then ./.stowrc, so the cwd one (cwd is the stow dir) must exist —
+        # a readable ~/.stowrc alone still leaves ENOENT from the ./.stowrc
+        # probe.
+        with open(os.path.join(stow_env.stow_dir, ".stowrc"), "w") as f:
+            f.write("")
+        prc, _, _ = stow_env.run_perl_stow(["-t", stow_env.target_dir, "a/b"])
+        yrc, _, _ = stow_env.run_python_stow(["-t", stow_env.target_dir, "a/b"])
+        assert prc == 255, "Perl: die with $! == 0 exits 255"
+        assert yrc == 1
+
+    def test_stowrc_is_a_directory(self, stow_env):
+        """#20: ~/.stowrc is a directory.
+
+        Perl's open() of a directory succeeds, the read fails, and the
+        pending handle error surfaces at close(): 'Could not close open
+        file', exit 21 (EISDIR). Python's open() fails up front with a
+        truthful 'Could not open ... for reading' and exit 1.
+        """
+        stow_env.create_package("pkg", {"file": "content"})
+        os.mkdir(os.path.join(stow_env.tmpdir, ".stowrc"))
+
+        prc, _, perr = stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg"])
+        yrc, _, yerr = stow_env.run_python_stow(["-t", stow_env.target_dir, "pkg"])
+        assert prc == 21, f"Perl: EISDIR via $! at close; stderr: {perr!r}"
+        assert "Could not close open file" in perr
+        assert yrc == 1
+        assert "Could not open" in yerr and "for reading" in yerr
+        assert "Traceback" not in yerr
+
+    def test_tilde_unknown_user_in_stowrc(self, stow_env):
+        """#21: '--target=~nosuchuser/t' in .stowrc.
+
+        Perl substitutes the unknown user's home as the EMPTY string
+        (with an uninitialized-value warning), mangling the path to
+        '/t'; Python keeps the literal path. Both then fail on a
+        nonexistent target directory, naming different paths.
+        """
+        stow_env.create_package("pkg", {"file": "content"})
+        with open(os.path.join(stow_env.tmpdir, ".stowrc"), "w") as f:
+            f.write(f"-d {stow_env.stow_dir}\n")
+            f.write("--target=~nosuchuserqz042/t\n")
+
+        prc, _, perr = stow_env.run_perl_stow(["pkg"])
+        yrc, _, yerr = stow_env.run_python_stow(["pkg"])
+        assert prc != 0 and yrc != 0
+        assert "Use of uninitialized value" in perr
+        assert "'/t'" in perr, f"Perl mangles the target to /t: {perr!r}"
+        assert "~nosuchuserqz042/t" in yerr, "Python keeps the literal path"
+        assert "Use of uninitialized value" not in yerr
+
+    def test_home_unset_perl_warning_noise(self, stow_env):
+        """#19: with HOME unset, Perl emits 'Use of uninitialized value'
+        warnings on an otherwise successful run; Python is silent."""
+        stow_env.create_package("pkg", {"file": "content"})
+        args = ["-d", stow_env.stow_dir, "-t", stow_env.target_dir, "pkg"]
+
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(args, env={"HOME": None})
+        assert prc == 0, f"Perl run should succeed: {perr}"
+        assert os.path.islink(os.path.join(stow_env.target_dir, "file"))
+        assert "Use of uninitialized value" in perr
+
+        stow_env.reset_target()
+        yrc, _, yerr = stow_env.run_python_stow(args, env={"HOME": None})
+        assert yrc == 0, f"Python run should succeed: {yerr}"
+        assert os.path.islink(os.path.join(stow_env.target_dir, "file"))
+        assert yerr == ""
+
+    def test_plus_n_deprecation_warning(self, stow_env):
+        """#22: '+n' simulates on both sides; Python adds one deprecation
+        warning line that Perl does not print."""
+        stow_env.create_package("pkg", {"file": "content"})
+        simulate_line = "WARNING: in simulation mode so not modifying filesystem.\n"
+
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(["-t", stow_env.target_dir, "+n", "pkg"])
+        assert prc == 0
+        assert perr == simulate_line
+        check_not_exists(stow_env, "file")
+
+        stow_env.reset_target()
+        yrc, _, yerr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "+n", "pkg"]
+        )
+        assert yrc == 0
+        assert yerr == "Warning: +n is deprecated, use -n instead\n" + simulate_line
+        check_not_exists(stow_env, "file")
+
+    def test_v5_ignore_regexp_lines_unmatchable(self, stow_env):
+        """#23: at -v5 the two 'Ignore list regexp' lines can never match
+        (Perl's qr stringification plus per-process hash-order random
+        alternation); every OTHER -v5 stderr line must be byte-identical.
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        args = ["-v5", "-n", "-t", stow_env.target_dir, "pkg"]
+
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(args)
+        stow_env.reset_target()
+        yrc, _, yerr = stow_env.run_python_stow(args)
+        assert prc == 0 and yrc == 0
+
+        def split(text):
+            lines = text.splitlines()
+            regexp_lines = [ln for ln in lines if "Ignore list regexp" in ln]
+            other_lines = [ln for ln in lines if "Ignore list regexp" not in ln]
+            return regexp_lines, other_lines
+
+        perl_regexp, perl_rest = split(perr)
+        python_regexp, python_rest = split(yerr)
+        assert len(perl_regexp) == 2 and all("(?^:" in ln for ln in perl_regexp)
+        assert len(python_regexp) == 2 and not any("(?^:" in ln for ln in python_regexp)
+        assert perl_rest == python_rest, "all other -v5 lines must match exactly"
+
+    def test_chkstow_cant_stat_without_perl_suffix(self, stow_env):
+        """#18: for an unstattable target, Perl's warn appends its
+        ' at <script> line N.' suffix (an artifact of the Perl runtime);
+        Python prints the message alone. Both exit 0 reporting nothing."""
+        prc, pout, perr = stow_env.run_perl_chkstow(["-t", "nosuchdir", "-b"])
+        yrc, yout, yerr = stow_env.run_python_chkstow(["-t", "nosuchdir", "-b"])
+        assert prc == 0 and yrc == 0
+        assert pout == "" and yout == ""
+        assert yerr == "Can't stat nosuchdir: No such file or directory\n"
+        assert perr.startswith("Can't stat nosuchdir: No such file or directory")
+        assert " line " in perr, f"Perl warn suffix expected: {perr!r}"

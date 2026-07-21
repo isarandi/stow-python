@@ -77,9 +77,13 @@ characters.
 
 **Cause:** Perl's Getopt::Long has a deprecated `getopt_compat` feature that treats `+` as an option prefix. This behavior is complex (partial long option matching, different handling for different characters) and rarely used, so we don't fully support it.
 
-**Exception:** `+n` is supported as equivalent to `-n` (simulate/dry-run mode) for backwards compatibility.
+**Exception:** `+n` is supported as equivalent to `-n` (simulate/dry-run mode) for backwards compatibility, with an added deprecation warning — see #22.
 
-**Note:** Use `-` for options.
+**Note:** Use `-` for options. This entry is about `stow`; `chkstow`'s
+Perl parser uses Getopt::Long's *default* configuration, and the Python
+chkstow reproduces that configuration fully (including `+` prefixes,
+case-insensitive long options, and unique-prefix abbreviation), so there
+is no divergence for chkstow.
 
 ## 6. Empty Package Name Rejected
 
@@ -167,7 +171,7 @@ This is an extremely unlikely scenario. The check is legacy protection for ancie
 **Why we don't match this:**
 
 1. **chkstow is read-only** - it doesn't modify the filesystem, so syscall order doesn't affect behavior
-2. **Output is sorted** - the visible result (package list, bad links, aliens) is always sorted alphabetically
+2. **Output order coincides** - only `-l` output is explicitly sorted (by both implementations); `-b`/`-a` print in traversal order, and the orders File::Find and os.walk() produce coincide for the tree shapes involved (files of a directory before its subdirectories' contents) - asserted by the oracle tests, which compare stdout byte-for-byte
 3. **No practical benefit** - matching traversal order would require reimplementing `File::Find`'s quirks with no user-visible improvement
 
 **Testing implication:** Oracle tests for chkstow compare only return code, stdout, and stderr - not filesystem operations via strace. The output matching is sufficient to verify behavioral equivalence.
@@ -201,7 +205,20 @@ Perl's Getopt::Long consumes `--` and leaves the remaining arguments in `@ARGV`,
 
 ## 13. Exit Codes on Fatal Errors
 
-Perl's `die` exits with `$!` — the errno left over from the *last failed syscall*, which is accidental: `stow a/b` ("Slashes are not permitted...") exits 2 if no `.stowrc` exists (ENOENT from probing it) but 255 if one does. We use intentional, stable exit codes instead (nonzero on error, documented per message). Scripts should test for nonzero rather than specific values.
+Perl's `die` exits with `$!` — the errno left over from the *last failed
+syscall*, which is accidental: `stow a/b` ("Slashes are not permitted...")
+exits 2 if no `.stowrc` exists (ENOENT from probing it) but 255 when the
+last rc-file probe succeeded and `$!` is clean. We use intentional, stable
+exit codes instead: where the fatal error IS a failed filesystem check, its
+errno is used (missing package → 2 ENOENT; package path exists but is a
+plain file → 20 ENOTDIR, byte-identical stderr to Perl); CLI usage errors
+exit 1. Scripts should test for nonzero rather than specific values.
+
+Pinned by `TestExitCodeAndWarningDivergences` in
+`tests/test_divergence_pinning_both.py`: `a/b` → Perl 2 / 255 (without /
+with a readable `./.stowrc`) vs Python 1; package-is-a-file → Perl 2 vs
+Python 20 with identical stderr on both planners; `.stowrc`-is-a-directory
+→ Perl 21 vs Python 1 (see #20).
 
 ## 14. Refolding Ignores Perl's `foldable('')` Bug
 
@@ -236,6 +253,68 @@ descriptions, but adds two attribution lines (naming this as a Python
 reimplementation and crediting the original GNU Stow authors) and points bug
 reports at this project's issue tracker instead of the GNU addresses. The
 oracle test harness normalizes exactly these known lines and nothing else.
+
+## 18. chkstow "Can't stat" Warning Format
+
+For an unstattable target, Perl's File::Find warns
+`Can't stat <target>: No such file or directory` and Perl's `warn` appends
+` at <path-to-chkstow> line N.` — the script's own install path and line
+number, an artifact of the Perl runtime with no meaning here. Python prints
+the same first line and nothing more. Both exit 0 having reported nothing.
+Pinned by a test asserting both formats.
+
+## 19. Perl Runtime Warning Noise with HOME Unset
+
+With `HOME` unset, Perl prints `Use of uninitialized value` warnings on an
+otherwise successful run (the `$ENV{HOME}` tildification and global-ignore
+path construction interpolate an undefined value); the run still succeeds.
+Python is silent and succeeds. Same class as #4: interpreter warning noise
+we do not reproduce. Pinned by a test asserting Perl's warnings and
+Python's silence with identical tree results.
+
+## 20. `.stowrc` Is a Directory
+
+Perl's `open('<', ...)` on a directory *succeeds*; the subsequent read
+fails, and the pending handle error only surfaces at `close()`, so Perl
+dies with the misleading `Could not close open file: <path>` and exit 21
+(EISDIR via `$!`). Python's `open()` fails up front, producing the
+truthful `Could not open <path> for reading` with exit 1 (see #13).
+Pinned by a test asserting both messages and codes.
+
+## 21. `~unknownuser` in `.stowrc` Paths
+
+For `--target=~nosuchuser/t` in an rc file, Perl substitutes the unknown
+user's home directory as the EMPTY string (with an uninitialized-value
+warning), silently mangling the path to `/t`. Python leaves the path
+literal. Both then fail on a nonexistent directory, but the error names
+different paths — and if a directory literally named `~nosuchuser/t`
+exists, Python uses it while Perl never can. A path that mangles itself
+is the worse failure mode. Pinned by a test asserting both behaviors.
+
+## 22. `+n` Prints a Deprecation Warning
+
+Perl's getopt_compat consumes `+n` silently. Python supports `+n` as the
+one `+`-form (the exception documented in #5) but prepends a single
+stderr line `Warning: +n is deprecated, use -n instead` to steer scripts
+toward the portable spelling. Pinned by a test asserting Perl's silence
+and Python's exact warning line.
+
+## 23. `-v5` Ignore-List Regexp Lines Are Unmatchable
+
+At verbosity 5 both implementations print their compiled default-ignore
+regexps. Perl stringifies compiled patterns as `(?^:...)` and its hash
+iteration order randomizes the alternation per process — two consecutive
+Perl runs already differ — while Python prints its own stable format.
+These two lines are therefore inherently uncomparable. Every OTHER
+verbosity 4-5 debug line is byte-identical (task-action lines, join_paths
+traces including "After .. removal", marked-stow-dir prefix joins), which
+is pinned by a test that strips exactly these two lines from both sides
+and asserts the remaining `-v5` stderr equal.
+
+One further cosmetic caveat in this area: Perl interpolates `$ENV{HOME}`
+into the `-v3` tildification substitution as a raw regex, so a HOME
+containing regex metacharacters misbehaves in Perl; Python escapes it.
+For any normal HOME the output is byte-identical.
 
 ---
 
