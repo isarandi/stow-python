@@ -20,7 +20,6 @@ Testing ignore lists.
 """
 
 import os
-import tempfile
 
 import pytest
 
@@ -145,9 +144,14 @@ def check_user_global_list(stow, stow_path, package, context, expect_ignores):
         )
 
 
-def do_setup_user_global_list():
-    """Set up user's global ignore list in a temp home directory."""
-    os.environ["HOME"] = tempfile.mkdtemp()
+def do_setup_user_global_list(monkeypatch, tmp_path):
+    """Set up user's global ignore list in a temp home directory.
+
+    HOME is redirected via monkeypatch (restored on teardown) to a
+    directory under tmp_path (cleaned up by pytest), so nothing leaks."""
+    home = tmp_path / "global-ignore-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     setup_global_ignore("""\
 exact
 .+substring.+ # here's a comment
@@ -190,10 +194,10 @@ class TestIgnoreUserGlobalList:
     """Test ~/.stow-global-ignore."""
 
     @pytest.fixture(autouse=True)
-    def setup_global_list(self, stow_test_env):
+    def setup_global_list(self, stow_test_env, monkeypatch, tmp_path):
         self.stow = new_Stow()
         self.stow_path = "../stow"
-        do_setup_user_global_list()
+        do_setup_user_global_list(monkeypatch, tmp_path)
         self.package = "non-existent-package"
         self.context = "when using ~/" + GLOBAL_IGNORE_FILE
 
@@ -217,10 +221,10 @@ class TestIgnoreEmptyPackageLocalList:
     """Test empty package-local .stow-local-ignore."""
 
     @pytest.fixture(autouse=True)
-    def setup_empty_local_list(self, stow_test_env):
+    def setup_empty_local_list(self, stow_test_env, monkeypatch, tmp_path):
         self.stow = new_Stow()
         self.stow_path = "../stow"
-        do_setup_user_global_list()
+        do_setup_user_global_list(monkeypatch, tmp_path)
         self.package = "ignorepkg"
         self.local_ignore = do_setup_package_local_list(
             self.stow_path, self.package, ""
@@ -263,10 +267,10 @@ class TestIgnorePackageLocalSegmentRegexps:
     """Test package-local .stow-local-ignore with only path segment regexps."""
 
     @pytest.fixture(autouse=True)
-    def setup_local_list(self, stow_test_env):
+    def setup_local_list(self, stow_test_env, monkeypatch, tmp_path):
         self.stow = new_Stow()
         self.stow_path = "../stow"
-        do_setup_user_global_list()
+        do_setup_user_global_list(monkeypatch, tmp_path)
         self.package = "ignorepkg"
         self.local_ignore = do_setup_package_local_list(
             self.stow_path, self.package, "random\n"
@@ -311,10 +315,10 @@ class TestIgnorePackageLocalFullPathRegexps:
     """Test package-local .stow-local-ignore with only full path regexps."""
 
     @pytest.fixture(autouse=True)
-    def setup_local_list(self, stow_test_env):
+    def setup_local_list(self, stow_test_env, monkeypatch, tmp_path):
         self.stow = new_Stow()
         self.stow_path = "../stow"
-        do_setup_user_global_list()
+        do_setup_user_global_list(monkeypatch, tmp_path)
         self.package = "ignorepkg"
         self.local_ignore = do_setup_package_local_list(
             self.stow_path, self.package, "foo2/bar\n"
@@ -357,10 +361,10 @@ class TestIgnorePackageLocalMixedRegexps:
     """Test package-local .stow-local-ignore with a mixture of regexps."""
 
     @pytest.fixture(autouse=True)
-    def setup_local_list(self, stow_test_env):
+    def setup_local_list(self, stow_test_env, monkeypatch, tmp_path):
         self.stow = new_Stow()
         self.stow_path = "../stow"
-        do_setup_user_global_list()
+        do_setup_user_global_list(monkeypatch, tmp_path)
         self.package = "ignorepkg"
         self.local_ignore = do_setup_package_local_list(
             self.stow_path,

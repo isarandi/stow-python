@@ -36,15 +36,17 @@ from stow_python.stow import _compile_option_pattern
 @pytest.fixture
 def test_env(tmp_path, monkeypatch):
     """Set up test environment for CLI option testing."""
-    # Initialize test directories
+    # Set HOME via monkeypatch BEFORE init_test_dirs so the pristine value
+    # is registered for restoration on teardown (init_test_dirs overwrites
+    # HOME with this same directory without restoring it)
     test_dir = str(tmp_path / "test")
+    monkeypatch.setenv("HOME", test_dir)
+
+    # Initialize test directories
     abs_test_dir = init_test_dirs(test_dir)
 
-    # Set HOME to test directory
-    monkeypatch.setenv("HOME", abs_test_dir)
-
-    # Change to target directory (like Perl tests)
-    os.chdir(os.path.join(abs_test_dir, "target"))
+    # Change to target directory (like Perl tests); restored on teardown
+    monkeypatch.chdir(os.path.join(abs_test_dir, "target"))
 
     return {
         "test_dir": test_dir,

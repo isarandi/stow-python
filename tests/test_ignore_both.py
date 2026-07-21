@@ -87,7 +87,14 @@ class TestIgnoreBoth:
 
         run_both_tests(
             stow_env,
-            ["-t", stow_env.target_dir, "--ignore=\\.bak", "--ignore=\\.tmp", "--ignore=~", "pkg"],
+            [
+                "-t",
+                stow_env.target_dir,
+                "--ignore=\\.bak",
+                "--ignore=\\.tmp",
+                "--ignore=~",
+                "pkg",
+            ],
             setup,
             check,
             check_on_simulate=False,
@@ -231,11 +238,12 @@ class TestIgnoreBoth:
             pass
 
         def check(env):
-            # folder symlink created
-            full_path = os.path.join(env.target_dir, "file.txt")
-            assert os.path.exists(full_path) or os.path.islink(
-                os.path.join(env.target_dir, "file.txt").replace("/file.txt", "")
-            )
+            # Non-matching files are stowed as individual top-level links;
+            # the .log files are ignored and never appear in the target
+            check_link(env, "file.txt", "../stow/pkg/file.txt")
+            check_link(env, "readme", "../stow/pkg/readme")
+            check_not_exists(env, "file.log")
+            check_not_exists(env, "data.log")
 
         run_both_tests(
             stow_env,

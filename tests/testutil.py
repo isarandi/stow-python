@@ -94,6 +94,17 @@ TEST_DIR = "tmp-testing-trees"
 ABS_TEST_DIR = os.path.abspath(TEST_DIR)
 _original_cwd = None
 
+# init_test_dirs() overwrites $HOME, just like the Perl testutil.pm it is
+# ported from - but the Perl test suite runs each .t file in its own
+# process, while pytest runs everything in one process, so the change
+# would leak across tests. Capture the pristine value at import time
+# (test modules are imported during collection, before any test can
+# tamper with the environment) and restore it in cleanup_test_dirs().
+# Fixtures that call init_test_dirs() without cleanup_test_dirs() must
+# restore HOME themselves, e.g. by registering it with monkeypatch.setenv
+# BEFORE calling init_test_dirs().
+_original_home = os.environ.get("HOME")
+
 
 def init_test_dirs(test_dir=None):
     """
@@ -131,13 +142,14 @@ def init_test_dirs(test_dir=None):
         os.makedirs(path)
 
     # Don't let user's ~/.stow-global-ignore affect test results
+    # (restored by cleanup_test_dirs(); see _original_home above)
     os.environ["HOME"] = abs_test_dir
 
     return abs_test_dir
 
 
 def cleanup_test_dirs():
-    """Restore original working directory after test."""
+    """Restore original working directory and HOME after test."""
     global _original_cwd
     if _original_cwd is not None:
         try:
@@ -145,6 +157,12 @@ def cleanup_test_dirs():
         except OSError:
             pass
         _original_cwd = None
+
+    # Undo the HOME override made by init_test_dirs()
+    if _original_home is None:
+        os.environ.pop("HOME", None)
+    else:
+        os.environ["HOME"] = _original_home
 
 
 def _get_test_verbosity():

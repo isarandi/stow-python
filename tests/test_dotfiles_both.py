@@ -103,7 +103,9 @@ class TestStowDotfilesBoth:
             stow_env.create_target_dir(".emacs.d")
 
         def check(env):
-            check_link(env, ".emacs.d/init.el", "../../stow/dotfiles/dot-emacs.d/init.el")
+            check_link(
+                env, ".emacs.d/init.el", "../../stow/dotfiles/dot-emacs.d/init.el"
+            )
 
         run_both_tests(
             stow_env,
@@ -126,7 +128,9 @@ class TestStowDotfilesBoth:
             stow_env.create_target_dir(".emacs.d")
 
         def check(env):
-            check_link(env, ".emacs.d/.emacs.d", "../../stow/dotfiles/dot-emacs.d/dot-emacs.d")
+            check_link(
+                env, ".emacs.d/.emacs.d", "../../stow/dotfiles/dot-emacs.d/dot-emacs.d"
+            )
 
         run_both_tests(
             stow_env,
@@ -147,7 +151,9 @@ class TestStowDotfilesBoth:
             stow_env.create_target_dir(".one/.two")
 
         def check(env):
-            check_link(env, ".one/.two/three", "../../../stow/dotfiles/dot-one/dot-two/three")
+            check_link(
+                env, ".one/.two/three", "../../../stow/dotfiles/dot-one/dot-two/three"
+            )
 
         run_both_tests(
             stow_env,
@@ -247,7 +253,9 @@ class TestUnstowDotfilesBoth:
 
         def setup():
             stow_env.create_target_dir(".emacs.d")
-            stow_env.create_target_link(".emacs.d/init.el", "../../stow/dotfiles/dot-emacs.d/init.el")
+            stow_env.create_target_link(
+                ".emacs.d/init.el", "../../stow/dotfiles/dot-emacs.d/init.el"
+            )
 
         def check(env):
             check_not_exists(env, ".emacs.d/init.el")
@@ -272,7 +280,9 @@ class TestUnstowDotfilesBoth:
 
         def setup():
             stow_env.create_target_dir(".emacs.d")
-            stow_env.create_target_link(".emacs.d/init.el", "../../stow/dotfiles/dot-emacs.d/init.el")
+            stow_env.create_target_link(
+                ".emacs.d/init.el", "../../stow/dotfiles/dot-emacs.d/init.el"
+            )
 
         def check(env):
             check_not_exists(env, ".emacs.d/init.el")

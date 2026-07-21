@@ -74,9 +74,7 @@ class TestPermissionErrors:
         check), so its patterns do not apply and stowing proceeds with the
         defaults."""
         stow_env.create_package("pkg", {"file": "content"})
-        ignore_file = os.path.join(
-            stow_env.stow_dir, "pkg", ".stow-local-ignore"
-        )
+        ignore_file = os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore")
         with open(ignore_file, "w") as f:
             f.write("file\n")  # would ignore "file" if it were readable
         os.chmod(ignore_file, 0)
@@ -87,9 +85,7 @@ class TestPermissionErrors:
                 assert rc == 0, f"stow failed: {stderr}"
                 assert "Traceback" not in stderr
                 # The unreadable ignore file did not take effect
-                assert os.path.islink(
-                    os.path.join(stow_env.target_dir, "file")
-                )
+                assert os.path.islink(os.path.join(stow_env.target_dir, "file"))
         finally:
             os.chmod(ignore_file, stat_module.S_IRUSR | stat_module.S_IWUSR)
 

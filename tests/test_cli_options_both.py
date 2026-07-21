@@ -68,7 +68,12 @@ class TestCliOptionsBoth:
 
         run_both_tests(
             stow_env,
-            [f"--dir={stow_env.stow_dir}", f"--target={stow_env.target_dir}", "--stow", "pkg"],
+            [
+                f"--dir={stow_env.stow_dir}",
+                f"--target={stow_env.target_dir}",
+                "--stow",
+                "pkg",
+            ],
             setup,
             check,
             check_on_simulate=False,
@@ -252,7 +257,16 @@ class TestCliOptionsBoth:
 
         run_both_tests(
             stow_env,
-            ["-t", stow_env.target_dir, "-D", "pkg_delete", "-S", "pkg_stow", "-R", "pkg_restow"],
+            [
+                "-t",
+                stow_env.target_dir,
+                "-D",
+                "pkg_delete",
+                "-S",
+                "pkg_stow",
+                "-R",
+                "pkg_restow",
+            ],
             setup,
             check,
             check_on_simulate=False,
@@ -276,7 +290,9 @@ class TestCliOptionsBoth:
 
         # Test without POSIXLY_CORRECT - +n should work as simulate
         stow_env.reset_target()
-        rc, stdout, stderr = stow_env.run_python_stow(["-t", stow_env.target_dir, "+n", "pkg"])
+        rc, stdout, stderr = stow_env.run_python_stow(
+            ["-t", stow_env.target_dir, "+n", "pkg"]
+        )
         assert rc == 0, f"Expected success, got: {stderr}"
         assert "simulation mode" in stderr
         check(stow_env)
@@ -284,8 +300,7 @@ class TestCliOptionsBoth:
         # Test with POSIXLY_CORRECT - +n should be treated as package name (error)
         stow_env.reset_target()
         rc, stdout, stderr = stow_env.run_python_stow(
-            ["-t", stow_env.target_dir, "+n", "pkg"],
-            env={"POSIXLY_CORRECT": ""}
+            ["-t", stow_env.target_dir, "+n", "pkg"], env={"POSIXLY_CORRECT": ""}
         )
         assert rc != 0, "Expected error when +n treated as package"
         assert "+n" in stderr  # Error about package +n not found
@@ -534,7 +549,7 @@ class TestCliOptionsBoth:
 
         # The sibling value options behave the same way.
         for opt in ["--ignore=", "--defer=", "--override=", "--target=", "--dir="]:
-            name = opt[len("--"):-1]
+            name = opt[len("--") : -1]
             expected = "Option %s requires an argument" % name
 
             stow_env.reset_target()

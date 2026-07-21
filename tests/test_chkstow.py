@@ -19,39 +19,24 @@
 Tests for chkstow utility - Python port of chkstow.t
 """
 
-import os
 import re
 
 import pytest
 
 from testutil import init_test_dirs, make_path, make_file, make_link, make_invalid_link
 
-# Check if chkstow module exists
-CHKSTOW_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "bin", "chkstow"
-)
-CHKSTOW_EXISTS = os.path.exists(CHKSTOW_PATH)
-
-# Try to import chkstow module if it exists
-chkstow = None
-if CHKSTOW_EXISTS:
-    try:
-        import importlib.util
-        import importlib.machinery
-
-        loader = importlib.machinery.SourceFileLoader("chkstow", CHKSTOW_PATH)
-        spec = importlib.util.spec_from_loader("chkstow", loader)
-        if spec is not None:
-            chkstow = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(chkstow)
-    except Exception:
-        chkstow = None
+from stow_python import chkstow
 
 
 @pytest.fixture
 def chkstow_env(tmp_path, monkeypatch):
     """Set up test environment matching the Perl test structure."""
     monkeypatch.chdir(tmp_path)
+
+    # Set HOME via monkeypatch BEFORE init_test_dirs so the pristine value
+    # is registered for restoration on teardown (init_test_dirs overwrites
+    # HOME with this same directory without restoring it)
+    monkeypatch.setenv("HOME", str(tmp_path / "test"))
 
     # Initialize test dirs
     init_test_dirs(str(tmp_path / "test"))
@@ -104,7 +89,6 @@ def chkstow_env(tmp_path, monkeypatch):
     return target_dir
 
 
-@pytest.mark.skipif(not CHKSTOW_EXISTS, reason="chkstow not yet implemented")
 class TestChkstow:
     """Tests for the chkstow utility."""
 

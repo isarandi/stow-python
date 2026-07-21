@@ -208,16 +208,22 @@ class TestDeferOverrideRegexEdgeCases:
 
     def test_defer_with_regex_character_class(self, stow_env):
         """Defer with regex character class pattern."""
-        stow_env.create_package("pkg1", {
-            "man1/file": "first",
-            "man2/file": "first",
-            "bin/file": "first",
-        })
-        stow_env.create_package("pkg2", {
-            "man1/file": "second",
-            "man2/file": "second",
-            "bin/file": "second",
-        })
+        stow_env.create_package(
+            "pkg1",
+            {
+                "man1/file": "first",
+                "man2/file": "first",
+                "bin/file": "first",
+            },
+        )
+        stow_env.create_package(
+            "pkg2",
+            {
+                "man1/file": "second",
+                "man2/file": "second",
+                "bin/file": "second",
+            },
+        )
 
         def setup():
             stow_env.create_target_dir("man1")
@@ -243,16 +249,22 @@ class TestDeferOverrideRegexEdgeCases:
 
     def test_override_with_regex_alternation(self, stow_env):
         """Override with regex alternation pattern."""
-        stow_env.create_package("pkg1", {
-            "lib/file": "old",
-            "lib64/file": "old",
-            "share/file": "old",
-        })
-        stow_env.create_package("pkg2", {
-            "lib/file": "new",
-            "lib64/file": "new",
-            "share/file": "new",
-        })
+        stow_env.create_package(
+            "pkg1",
+            {
+                "lib/file": "old",
+                "lib64/file": "old",
+                "share/file": "old",
+            },
+        )
+        stow_env.create_package(
+            "pkg2",
+            {
+                "lib/file": "new",
+                "lib64/file": "new",
+                "share/file": "new",
+            },
+        )
 
         def setup():
             stow_env.create_target_dir("lib")
@@ -272,14 +284,20 @@ class TestDeferOverrideRegexEdgeCases:
 
     def test_defer_with_anchor_start(self, stow_env):
         """Defer with anchor pattern (start of path)."""
-        stow_env.create_package("pkg1", {
-            "usr/share/man/file": "first",
-            "share/man/file": "first",
-        })
-        stow_env.create_package("pkg2", {
-            "usr/share/man/file": "second",
-            "share/man/file": "second",
-        })
+        stow_env.create_package(
+            "pkg1",
+            {
+                "usr/share/man/file": "first",
+                "share/man/file": "first",
+            },
+        )
+        stow_env.create_package(
+            "pkg2",
+            {
+                "usr/share/man/file": "second",
+                "share/man/file": "second",
+            },
+        )
 
         def setup():
             stow_env.create_target_dir("usr/share/man")
@@ -301,16 +319,22 @@ class TestDeferOverrideRegexEdgeCases:
 
     def test_override_with_wildcard_and_quantifier(self, stow_env):
         """Override with .* wildcard and quantifiers."""
-        stow_env.create_package("pkg1", {
-            "local/bin/file": "old",
-            "local/lib/file": "old",
-            "system/bin/file": "old",
-        })
-        stow_env.create_package("pkg2", {
-            "local/bin/file": "new",
-            "local/lib/file": "new",
-            "system/bin/file": "new",
-        })
+        stow_env.create_package(
+            "pkg1",
+            {
+                "local/bin/file": "old",
+                "local/lib/file": "old",
+                "system/bin/file": "old",
+            },
+        )
+        stow_env.create_package(
+            "pkg2",
+            {
+                "local/bin/file": "new",
+                "local/lib/file": "new",
+                "system/bin/file": "new",
+            },
+        )
 
         def setup():
             stow_env.create_target_dir("local/bin")
@@ -330,14 +354,20 @@ class TestDeferOverrideRegexEdgeCases:
 
     def test_defer_with_extension_pattern(self, stow_env):
         """Defer pattern matching file extensions in path."""
-        stow_env.create_package("pkg1", {
-            "share/doc/file": "first",
-            "share/man/file": "first",
-        })
-        stow_env.create_package("pkg2", {
-            "share/doc/file": "second",
-            "share/man/file": "second",
-        })
+        stow_env.create_package(
+            "pkg1",
+            {
+                "share/doc/file": "first",
+                "share/man/file": "first",
+            },
+        )
+        stow_env.create_package(
+            "pkg2",
+            {
+                "share/doc/file": "second",
+                "share/man/file": "second",
+            },
+        )
 
         def setup():
             stow_env.create_target_dir("share/doc")
@@ -365,17 +395,23 @@ class TestPackageUpgradeScenarios:
     def test_upgrade_package_version_override(self, stow_env):
         """Upgrade package: override old version with new version of same package."""
         # Simulate two versions of the same package
-        stow_env.create_package("app-1.0", {
-            "bin/app": "version 1.0",
-            "lib/libapp.so": "lib 1.0",
-            "share/app/config": "config 1.0",
-        })
-        stow_env.create_package("app-2.0", {
-            "bin/app": "version 2.0",
-            "lib/libapp.so": "lib 2.0",
-            "share/app/config": "config 2.0",
-            "share/app/newfeature": "new in 2.0",
-        })
+        stow_env.create_package(
+            "app-1.0",
+            {
+                "bin/app": "version 1.0",
+                "lib/libapp.so": "lib 1.0",
+                "share/app/config": "config 1.0",
+            },
+        )
+        stow_env.create_package(
+            "app-2.0",
+            {
+                "bin/app": "version 2.0",
+                "lib/libapp.so": "lib 2.0",
+                "share/app/config": "config 2.0",
+                "share/app/newfeature": "new in 2.0",
+            },
+        )
 
         def setup():
             stow_env.create_target_dir("bin")
@@ -388,8 +424,14 @@ class TestPackageUpgradeScenarios:
             # All paths should now point to 2.0
             check_link(env, "bin/app", "../../stow/app-2.0/bin/app")
             check_link(env, "lib/libapp.so", "../../stow/app-2.0/lib/libapp.so")
-            check_link(env, "share/app/config", "../../../stow/app-2.0/share/app/config")
-            check_link(env, "share/app/newfeature", "../../../stow/app-2.0/share/app/newfeature")
+            check_link(
+                env, "share/app/config", "../../../stow/app-2.0/share/app/config"
+            )
+            check_link(
+                env,
+                "share/app/newfeature",
+                "../../../stow/app-2.0/share/app/newfeature",
+            )
 
         # Override all paths to allow upgrade
         run_both_tests(
@@ -403,15 +445,21 @@ class TestPackageUpgradeScenarios:
 
     def test_upgrade_with_restow(self, stow_env):
         """Upgrade using unstow old + stow new (restow pattern)."""
-        stow_env.create_package("pkg-old", {
-            "bin/cmd": "old",
-            "lib/lib.so": "old",
-        })
-        stow_env.create_package("pkg-new", {
-            "bin/cmd": "new",
-            "lib/lib.so": "new",
-            "lib/extra.so": "extra",
-        })
+        stow_env.create_package(
+            "pkg-old",
+            {
+                "bin/cmd": "old",
+                "lib/lib.so": "old",
+            },
+        )
+        stow_env.create_package(
+            "pkg-new",
+            {
+                "bin/cmd": "new",
+                "lib/lib.so": "new",
+                "lib/extra.so": "extra",
+            },
+        )
 
         def setup():
             stow_env.create_target_dir("bin")
@@ -436,14 +484,20 @@ class TestPackageUpgradeScenarios:
 
     def test_upgrade_selective_override(self, stow_env):
         """Upgrade with selective override - only upgrade specific paths."""
-        stow_env.create_package("app-1.0", {
-            "bin/app": "1.0 binary",
-            "etc/app.conf": "1.0 config",
-        })
-        stow_env.create_package("app-2.0", {
-            "bin/app": "2.0 binary",
-            "etc/app.conf": "2.0 config",
-        })
+        stow_env.create_package(
+            "app-1.0",
+            {
+                "bin/app": "1.0 binary",
+                "etc/app.conf": "1.0 config",
+            },
+        )
+        stow_env.create_package(
+            "app-2.0",
+            {
+                "bin/app": "2.0 binary",
+                "etc/app.conf": "2.0 config",
+            },
+        )
 
         def setup():
             stow_env.create_target_dir("bin")

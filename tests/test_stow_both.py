@@ -209,7 +209,9 @@ class TestStowBoth:
             pkg_file = os.path.join(env.stow_dir, "pkg", "file")
             with open(pkg_file) as f:
                 content = f.read()
-            assert content == "target version", "package file should have adopted content"
+            assert content == "target version", (
+                "package file should have adopted content"
+            )
 
         run_both_tests(
             stow_env,

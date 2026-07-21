@@ -25,9 +25,16 @@ and check return codes and output.
 from __future__ import print_function
 
 import os
+import pwd
 import re
 import subprocess
 import sys
+
+import pytest
+
+from stow_python import cli
+from stow_python.cli import get_homedir_from_passwd, perl_shellwords
+from stow_python.types import StowInternalError
 
 # Path to the stow script
 STOW_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "bin", "stow")
@@ -70,4 +77,84 @@ class TestCLI:
         # Perl's Getopt::Long outputs option name without dashes
         assert re.search(r"^Unknown option: foo$", output, re.MULTILINE), (
             "unrecognised option should be listed"
+        )
+
+
+class TestPerlShellwords:
+    """Edge cases of the Text::ParseWords::shellwords() port used for .stowrc.
+
+    Expected outputs verified against Perl's Text::ParseWords 3.31."""
+
+    def test_double_quoted_backslash_escape(self):
+        # Inside double quotes, backslash escapes ANY character: \X -> X
+        assert perl_shellwords('--ignore="\\.git"') == ["--ignore=.git"]
+
+    def test_single_quoted_backslash_is_literal(self):
+        # Inside single quotes, backslash is copied literally
+        assert perl_shellwords("--ignore='\\.git'") == ["--ignore=\\.git"]
+
+    def test_backslash_does_not_close_single_quote(self):
+        # \' spans two characters while scanning, so it cannot end the quote
+        assert perl_shellwords("'a\\'b'") == ["a\\'b"]
+
+    def test_empty_quoted_words_kept(self):
+        assert perl_shellwords("\"\" ''") == ["", ""]
+
+    def test_unmatched_quote_drops_whole_line(self):
+        assert perl_shellwords('foo "bar') == []
+
+    def test_trailing_lone_backslash_drops_whole_line(self):
+        assert perl_shellwords("foo \\") == []
+        assert perl_shellwords("foo\\") == []
+
+    def test_words_split_on_any_whitespace(self):
+        assert perl_shellwords("one two\tthree   four") == [
+            "one",
+            "two",
+            "three",
+            "four",
+        ]
+
+    def test_quoted_segment_adjacent_to_unquoted_text(self):
+        # Adjacent quoted and unquoted segments form a single word
+        assert perl_shellwords('a"b c"d') == ["ab cd"]
+
+
+class TestGetHomedirFromPasswd:
+    """Passwd database lookups used by tilde expansion."""
+
+    def test_current_uid_lookup_returns_string_path(self):
+        home = get_homedir_from_passwd()
+        assert isinstance(home, str)
+        assert home == pwd.getpwuid(os.getuid()).pw_dir
+
+    def test_unknown_username_returns_none(self):
+        assert get_homedir_from_passwd(username="no_such_user_xyzzy_042") is None
+
+    def test_explicit_uid_lookup(self):
+        home = get_homedir_from_passwd(uid=os.getuid())
+        assert home == pwd.getpwuid(os.getuid()).pw_dir
+
+
+class TestInternalErrorHandler:
+    """main() must format StowInternalError with the bug-report banner."""
+
+    def test_internal_error_formatting(self, monkeypatch, capsys):
+        def boom():
+            raise StowInternalError("boom")
+
+        monkeypatch.setattr(cli, "_main", boom)
+
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main()
+
+        assert excinfo.value.code == 1
+        stderr = capsys.readouterr().err
+        assert "INTERNAL ERROR: boom" in stderr
+        assert (
+            "This _is_ a bug. Please submit a bug report so we can fix it! :-)"
+            in stderr
+        )
+        assert (
+            "See https://github.com/isarandi/stow-python for how to do this." in stderr
         )
