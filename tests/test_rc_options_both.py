@@ -52,14 +52,13 @@ class TestRcOptionsBoth:
 
         # Note: run from stow_dir (where .stowrc -d points)
         # The stowrc provides --dir and --target, so just pass package name
-        # Don't compare fs_ops - RC file handling has known syscall differences
         run_both_tests(
             stow_env,
             ["pkg"],
             setup,
             check,
             check_on_simulate=False,
-            compare_fs_ops=False,
+            compare_fs_ops=True,
         )
 
     def test_stowrc_defer_option(self, stow_env):
@@ -87,7 +86,7 @@ class TestRcOptionsBoth:
             setup,
             check,
             check_on_simulate=True,
-            compare_fs_ops=False,
+            compare_fs_ops=True,
         )
 
     def test_stowrc_ignore_option(self, stow_env):
@@ -119,7 +118,7 @@ class TestRcOptionsBoth:
             setup,
             check,
             check_on_simulate=False,
-            compare_fs_ops=False,
+            compare_fs_ops=True,
         )
 
     def test_cwd_stowrc_overrides_home(self, stow_env):
@@ -147,7 +146,7 @@ class TestRcOptionsBoth:
             setup,
             check,
             check_on_simulate=False,
-            compare_fs_ops=False,
+            compare_fs_ops=True,
         )
 
     def test_cli_overrides_stowrc(self, stow_env):
@@ -174,7 +173,7 @@ class TestRcOptionsBoth:
             setup,
             check,
             check_on_simulate=False,
-            compare_fs_ops=False,
+            compare_fs_ops=True,
         )
 
     def test_stowrc_with_verbose(self, stow_env):
@@ -198,5 +197,29 @@ class TestRcOptionsBoth:
             setup,
             check,
             check_on_simulate=False,
-            compare_fs_ops=False,
+            compare_fs_ops=True,
         )
+
+    def test_nonword_brace_expansion_stays_literal(self, stow_env):
+        """A ${...} whose braces contain non-word characters (e.g. the
+        shell-ism ${VAR-default}) is NOT expanded by either side: Perl's
+        rc expansion regex only accepts [\\w\\s]+ between the braces, and
+        Python replicates that. With a directory literally named
+        '${TQZ-x}' as the target, both implementations stow into it."""
+        import shutil
+
+        from conftest import assert_stow_match
+
+        stow_env.create_package("pkg", {"file": "content"})
+        literal_target = os.path.join(stow_env.tmpdir, "${TQZ-x}")
+
+        with open(os.path.join(stow_env.tmpdir, ".stowrc"), "w") as f:
+            f.write(f"-d {stow_env.stow_dir}\n")
+            f.write(f"--target={literal_target}\n")
+
+        def setup():
+            shutil.rmtree(literal_target, ignore_errors=True)
+            os.makedirs(literal_target)
+
+        assert_stow_match(stow_env, ["pkg"], setup)
+        assert os.path.islink(os.path.join(literal_target, "file"))

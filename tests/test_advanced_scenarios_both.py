@@ -276,3 +276,22 @@ class TestUnfoldFromOtherStowDir:
             check_func=None,
             compare_fs_ops=True,
         )
+
+
+class TestNonUtf8FilenamesBoth:
+    """Filenames containing bytes that are not valid UTF-8 must flow
+    through both implementations (Perl: raw bytes; Python:
+    surrogateescape) producing identical trees and exit codes."""
+
+    def test_stow_then_unstow_invalid_utf8_name(self, stow_env):
+        from conftest import assert_stow_match
+
+        weird_name = b"f\xff".decode("utf-8", "surrogateescape")
+        stow_env.create_package("pkg", {os.path.join("bin", weird_name): "content"})
+
+        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "pkg"])
+
+        def setup():
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg"])
+
+        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "-D", "pkg"], setup)

@@ -182,14 +182,15 @@ class TestAdopt:
 
     def test_adopt_existing_file(self, stow_env):
         """Adopt an existing file into the package."""
-        stow_env.create_package(
-            "mypkg",
-            {
-                "bin/hello": "from package",
-            },
-        )
 
         def setup():
+            # The package must be (re)created per run, not once outside
+            # setup(): --adopt MUTATES the package by moving the target
+            # file into it, so creating it only once would let the Perl
+            # run's adoption leak into the state the Python run starts
+            # from — and a Python adopt that failed to move anything
+            # could still produce a matching tree.
+            stow_env.create_package("mypkg", {"bin/hello": "from package"})
             stow_env.create_target_file("bin/hello", "existing content")
 
         assert_stow_match_with_fs_ops(

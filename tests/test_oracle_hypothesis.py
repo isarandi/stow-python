@@ -12,7 +12,12 @@ import tempfile
 
 from hypothesis import given, settings, assume, strategies as st, HealthCheck
 
-from conftest import StowTestEnv, assert_stow_match, assert_stow_match_with_fs_ops, assert_chkstow_match
+from conftest import (
+    StowTestEnv,
+    assert_stow_match,
+    assert_stow_match_with_fs_ops,
+    assert_chkstow_match,
+)
 
 # Oracle tests spawn subprocesses (Perl + Python), so disable per-example deadline
 # to avoid flaky failures on slower systems
@@ -39,7 +44,12 @@ def try_create_packages(env, packages):
 name_st = st.text(
     min_size=1,
     max_size=12,
-).filter(lambda x: "\0" not in x and "/" not in x and not x.startswith("-") and not x.startswith("+"))
+).filter(
+    lambda x: "\0" not in x
+    and "/" not in x
+    and not x.startswith("-")
+    and not x.startswith("+")
+)
 
 # Strategy for file content
 content_st = st.text(max_size=100)
@@ -401,12 +411,15 @@ class TestStowConflictsHypothesis:
         """Adopt existing files into the package with strace comparison."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = StowTestEnv(tmpdir)
-            env.create_package("pkg", pkg_files)
 
             # Create a conflicting file at one of the package paths
             paths = list(pkg_files.keys())
 
             def setup():
+                # Recreate the package per run: --adopt mutates it (moves
+                # the target file into it), and the Perl run's mutation
+                # must not become the Python run's starting state.
+                env.create_package("pkg", pkg_files)
                 if paths:
                     conflict_path = paths[conflict_idx % len(paths)]
                     env.create_target_file(conflict_path, "to be adopted")
