@@ -188,3 +188,97 @@ class TestChkstowSyscalls:
     def test_aliens_syscalls(self, chkstow_env):
         """Aliens check should produce identical syscalls."""
         assert_chkstow_match_with_fs_ops(chkstow_env, ["-a", "-t", "."])
+
+
+class TestChkstowGetoptLongBoth:
+    """chkstow's option parser reproduces Getopt::Long's DEFAULT
+    configuration (unlike stow's): case-insensitive long options,
+    unique-prefix abbreviation, '+' option prefixes, and stderr warnings
+    for bad options followed by usage on stdout with exit 0. Everything
+    here is asserted equal against the Perl oracle.
+    """
+
+    def _make_bogus_link(self, stow_env):
+        stow_env.create_target_link("bogus", "nonexistent-dest")
+
+    def test_abbreviated_and_case_insensitive_long_options(self, stow_env):
+        self._make_bogus_link(stow_env)
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["--bad", "-t", "."])
+        assert rc == 0 and "Bogus link:" in stdout
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["--tar", ".", "-b"])
+        assert "Bogus link:" in stdout
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["--BADLINKS", "-t", "."])
+        assert "Bogus link:" in stdout
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["-B", "-t", "."])
+        assert "Bogus link:" in stdout
+
+    def test_plus_prefix_getopt_compat(self, stow_env):
+        self._make_bogus_link(stow_env)
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["+b", "-t", "."])
+        assert rc == 0 and "Bogus link:" in stdout
+
+    def test_single_dash_equals_value(self, stow_env):
+        """Getopt::Long accepts -t=DIR (name t, value DIR) but treats
+        -tDIR as the unknown option 'tDIR' — no bundling."""
+        self._make_bogus_link(stow_env)
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["-t=.", "-b"])
+        assert rc == 0 and "Bogus link:" in stdout
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-t.", "-b"])
+        assert rc == 0
+        assert "Unknown option: t." in stderr
+        assert "USAGE:" in stdout
+
+    def test_unknown_option_warns_then_usage(self, stow_env):
+        self._make_bogus_link(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-x", "-t", "."])
+        assert rc == 0
+        assert "Unknown option: x" in stderr
+        assert "USAGE:" in stdout
+
+    def test_missing_option_value_warns_then_usage(self, stow_env):
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t"])
+        assert rc == 0
+        assert "requires an argument" in stderr
+        assert "USAGE:" in stdout
+
+    def test_flag_with_attached_value_rejected(self, stow_env):
+        self._make_bogus_link(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["--badlinks=1", "-t", "."])
+        assert rc == 0
+        assert "USAGE:" in stdout
+
+    def test_non_option_arguments_ignored(self, stow_env):
+        """Perl chkstow leaves non-option args in @ARGV and never reads
+        them; the scan still runs on the -t target."""
+        self._make_bogus_link(stow_env)
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["foo", "-b", "-t", "."])
+        assert rc == 0 and "Bogus link:" in stdout
+
+    def test_posixly_correct_disables_abbreviation(self, stow_env):
+        self._make_bogus_link(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(
+            stow_env, ["--bad", "-t", "."], env={"POSIXLY_CORRECT": "1"}
+        )
+        assert rc == 0
+        assert "Unknown option: bad" in stderr
+        assert "USAGE:" in stdout
+
+    def test_posixly_correct_disables_plus_and_stops_at_non_option(self, stow_env):
+        """Under POSIXLY_CORRECT, '+b' is not an option: it becomes the
+        first non-option argument, require_order stops parsing there, and
+        the scan runs on the default target in badlinks mode. STOW_DIR
+        points the default at the local tree, never /usr/local."""
+        self._make_bogus_link(stow_env)
+        rc, stdout, _ = assert_chkstow_match(
+            stow_env, ["+b"], env={"POSIXLY_CORRECT": "1", "STOW_DIR": "."}
+        )
+        assert rc == 0 and "Bogus link:" in stdout
+
+    def test_nonexistent_target_warns_cant_stat(self, stow_env):
+        """File::Find warns "Can't stat ..." and checks nothing; the
+        harness strips only Perl's " at <script> line N." suffix, so the
+        message itself is compared."""
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-t", "nosuchdir", "-b"])
+        assert rc == 0
+        assert stdout == ""
+        assert stderr == "Can't stat nosuchdir: No such file or directory\n"

@@ -305,6 +305,14 @@ def normalize_newline_warnings(text):
         text,
     )
 
+    # File::Find's "Can't stat" warning ends in a newline BEFORE the
+    # location, so the suffix lands on its own line.
+    text = re.sub(
+        r"(Can't stat [^\n]*)\n at [^\n]+ line \d+\.",
+        r"\1",
+        text,
+    )
+
     return text
 
 
@@ -401,6 +409,10 @@ def assert_chkstow_match(stow_env, args, setup_func=None, env=None):
     if setup_func:
         setup_func()
     python_rc, python_stdout, python_stderr = stow_env.run_python_chkstow(args, env)
+
+    # Strip Perl's warn source-location suffixes ("Can't stat ...")
+    perl_stderr = normalize_newline_warnings(perl_stderr)
+    python_stderr = normalize_newline_warnings(python_stderr)
 
     # Compare return codes
     assert perl_rc == python_rc, (

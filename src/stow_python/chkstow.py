@@ -45,31 +45,104 @@ def main() -> None:
                 print(pkg)
 
 
+# Option table mirroring Perl chkstow's GetOptions() spec
+# ('b|badlinks', 'a|aliens', 'l|list', 't|target=s') under Getopt::Long's
+# DEFAULT configuration, which differs from the one stow's parser
+# emulates: long names match case-insensitively, "+" works as an option
+# prefix (getopt_compat), and there is no short-option bundling. A None
+# mode marks the value-taking target option.
+_OPTION_SPECS: tuple[tuple[tuple[str, ...], Mode | None], ...] = (
+    (("b", "badlinks"), Mode.BAD_LINKS),
+    (("a", "aliens"), Mode.ALIENS),
+    (("l", "list"), Mode.LIST),
+    (("t", "target"), None),
+)
+
+
 def parse_args(args: list[str]) -> tuple[str, Mode]:
-    """Parse arguments, return (target, mode)."""
+    """Parse arguments like Perl chkstow's GetOptions() call.
+
+    Returns (target, mode). A bad option warns on stderr exactly like
+    Getopt::Long, and after the remaining arguments have been checked ends
+    in usage(), mirroring Perl's `GetOptions(...) or usage()`. Non-option
+    arguments are skipped: Perl chkstow leaves them in @ARGV and never
+    reads them. POSIXLY_CORRECT disables abbreviation and "+" prefixes
+    and stops option processing at the first non-option argument
+    (require_order).
+    """
     target = DEFAULT_TARGET
     mode = Mode.BAD_LINKS
+    posixly_correct = "POSIXLY_CORRECT" in os.environ
+    ok = True
 
     i = 0
     while i < len(args):
         arg = args[i]
-        match arg:
-            case "-b" | "--badlinks":
-                mode = Mode.BAD_LINKS
-            case "-a" | "--aliens":
-                mode = Mode.ALIENS
-            case "-l" | "--list":
-                mode = Mode.LIST
-            case "-t" | "--target" if i + 1 < len(args):
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            name = arg[2:]
+        elif len(arg) > 1 and (
+            arg.startswith("-") or (arg.startswith("+") and not posixly_correct)
+        ):
+            name = arg[1:]
+        else:
+            if posixly_correct:
+                break
+            i += 1
+            continue
+
+        attached: str | None = None
+        if "=" in name and not name.startswith("="):
+            name, attached = name.split("=", 1)
+
+        spec = _find_option(name, allow_abbrev=not posixly_correct)
+        if spec is None:
+            print(f"Unknown option: {name}", file=sys.stderr)
+            ok = False
+        else:
+            _, spec_mode = spec
+            if spec_mode is not None:
+                if attached is not None:
+                    print(f"Option {name} does not take an argument", file=sys.stderr)
+                    ok = False
+                else:
+                    mode = spec_mode
+            elif attached is not None:
+                target = attached
+            elif i + 1 < len(args):
                 i += 1
                 target = args[i]
-            case _ if arg.startswith("--target="):
-                target = arg.removeprefix("--target=")
-            case _:
-                usage()
+            else:
+                print(f"Option {name} requires an argument", file=sys.stderr)
+                ok = False
         i += 1
 
+    if not ok:
+        usage()
+
     return target, mode
+
+
+def _find_option(
+    name: str, allow_abbrev: bool
+) -> tuple[tuple[str, ...], Mode | None] | None:
+    """Resolve an option name like Getopt::Long's default find_option: an
+    exact match on a name or alias wins, else a unique prefix resolves,
+    both case-insensitively. Returns the matching spec, or None if the
+    option is unknown. (No prefix is ambiguous between two of chkstow's
+    specs, so there is no ambiguity error path.)
+    """
+    folded = name.lower()
+    for spec in _OPTION_SPECS:
+        if folded in spec[0]:
+            return spec
+    if not allow_abbrev or not folded:
+        return None
+    hits = [
+        spec for spec in _OPTION_SPECS if any(n.startswith(folded) for n in spec[0])
+    ]
+    return hits[0] if len(hits) == 1 else None
 
 
 def usage() -> None:
@@ -150,7 +223,14 @@ def _walk_target(target: str, wanted) -> Iterator[str]:
     """
     # File::Find saves cwd at start and returns to it at end
     start_cwd = os.getcwd()
-    st = os.lstat(target)
+    try:
+        st = os.lstat(target)
+    except OSError as e:
+        # File::Find warns and checks nothing. Perl's warn appends its
+        # " at <script> line N." source location, which the test harness
+        # normalizes away like the other Perl warning locations.
+        print(f"Can't stat {target}: {e.strerror}", file=sys.stderr)
+        return
 
     # File::Find does NOT descend a top-level argument that is not a
     # directory (note: a symlink to a directory is still a symlink here).
