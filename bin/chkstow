@@ -108,7 +108,14 @@ def _walk_target(target, wanted):
     """
     # File::Find saves cwd at start and returns to it at end
     start_cwd = os.getcwd()
-    st = os.lstat(target)
+    try:
+        st = os.lstat(target)
+    except OSError as e:
+        # File::Find warns and checks nothing. Perl's warn appends its
+        # " at <script> line N." source location, which the test harness
+        # normalizes away like the other Perl warning locations.
+        sys.stderr.write("Can't stat %s: %s\n" % (target, e.strerror))
+        return
 
     # File::Find does NOT descend a top-level argument that is not a
     # directory (a symlink to a directory is still a symlink here). It
@@ -277,31 +284,103 @@ def list_pkg(path):
         Package[link_dest] = 1
 
 
+# Option table mirroring Perl chkstow's GetOptions() spec
+# ('b|badlinks', 'a|aliens', 'l|list', 't|target=s') under Getopt::Long's
+# DEFAULT configuration: long names match case-insensitively, a unique
+# prefix abbreviates, "+" works as an option prefix (getopt_compat), and
+# there is no short-option bundling (so -tDIR is the unknown option
+# "tDIR", while -t=DIR works). None marks the value-taking target option.
+OPTION_SPECS = (
+    (('b', 'badlinks'), bad_links),
+    (('a', 'aliens'), aliens),
+    (('l', 'list'), list_pkg),
+    (('t', 'target'), None),
+)
+
+
+def find_option(name, allow_abbrev):
+    """Resolve an option name like Getopt::Long's default find_option: an
+    exact match on a name or alias wins, else a unique prefix resolves,
+    both case-insensitively. Returns the matching spec, or None if the
+    option is unknown. (No prefix is ambiguous between two of chkstow's
+    specs, so there is no ambiguity error path.)
+    """
+    folded = name.lower()
+    for spec in OPTION_SPECS:
+        if folded in spec[0]:
+            return spec
+    if not allow_abbrev or not folded:
+        return None
+    hits = []
+    for spec in OPTION_SPECS:
+        for option_name in spec[0]:
+            if option_name.startswith(folded):
+                hits.append(spec)
+                break
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
 def process_options():
-    """Process command line options."""
+    """Process command line options like Perl's GetOptions(...) or usage().
+
+    A bad option warns on stderr exactly like Getopt::Long, and after the
+    remaining arguments have been checked ends in usage(), mirroring
+    Perl's `GetOptions(...) or usage()`. Non-option arguments are
+    skipped: Perl chkstow leaves them in @ARGV and never reads them.
+    POSIXLY_CORRECT disables abbreviation and "+" prefixes and stops
+    option processing at the first non-option argument (require_order).
+    """
     global Wanted, Target
 
-    i = 1
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-
-        if arg in ('-b', '--badlinks'):
-            Wanted = bad_links
-        elif arg in ('-a', '--aliens'):
-            Wanted = aliens
-        elif arg in ('-l', '--list'):
-            Wanted = list_pkg
-        elif arg in ('-t', '--target') and i + 1 < len(sys.argv):
-            i += 1
-            Target = sys.argv[i]
-        elif arg.startswith('--target='):
-            Target = arg[9:]
-        elif arg.startswith('-t'):
-            Target = arg[2:]
+    posixly_correct = 'POSIXLY_CORRECT' in os.environ
+    ok = True
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == '--':
+            break
+        if arg.startswith('--'):
+            name = arg[2:]
+        elif len(arg) > 1 and (
+            arg.startswith('-')
+            or (arg.startswith('+') and not posixly_correct)
+        ):
+            name = arg[1:]
         else:
-            usage()
+            if posixly_correct:
+                break
+            i += 1
+            continue
 
+        attached = None
+        if '=' in name and not name.startswith('='):
+            name, attached = name.split('=', 1)
+
+        spec = find_option(name, not posixly_correct)
+        if spec is None:
+            sys.stderr.write("Unknown option: %s\n" % name)
+            ok = False
+        elif spec[1] is not None:
+            if attached is not None:
+                sys.stderr.write("Option %s does not take an argument\n" % name)
+                ok = False
+            else:
+                Wanted = spec[1]
+        elif attached is not None:
+            Target = attached
+        elif i + 1 < len(args):
+            i += 1
+            Target = args[i]
+        else:
+            sys.stderr.write("Option %s requires an argument\n" % name)
+            ok = False
         i += 1
+
+    if not ok:
+        usage()
 
 
 def usage():
