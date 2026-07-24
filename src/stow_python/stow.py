@@ -36,6 +36,7 @@ import functools
 import os
 import re
 import sys
+import warnings
 from contextlib import contextmanager
 from collections.abc import Iterator, Sequence
 
@@ -187,6 +188,79 @@ _PATTERN_TEMPLATES = {
     "override": r"\A({})",
 }
 
+# A POSIX bracket class inside a bracket expression: [[:alpha:]] is a
+# character class to Perl and the set [[:alph] plus a literal ] to Python's
+# re, so it compiles in both engines with different meanings. A bare
+# [:alpha:] OUTSIDE brackets denotes the same character set in both and is
+# deliberately not matched here.
+_POSIX_CLASS_RE = re.compile(r"\[\^?[^\]]*\[:[a-z]+:\]")
+
+_POSIX_CLASS_HINT = (
+    "POSIX character classes ([[:alpha:]]) are not supported; "
+    "use Python re syntax such as [A-Za-z]"
+)
+
+# A leading global flag group, legal at the start of a pattern in both
+# engines. Only the flags whose Python spelling agrees with re.ASCII are
+# listed; (?u) and (?L) would contradict it and are left to fail as the
+# malformed patterns they are here.
+_LEADING_FLAGS_RE = re.compile(r"\A\(\?([aimsx]+)\)")
+
+_INLINE_FLAGS = {
+    "a": re.ASCII,
+    "i": re.IGNORECASE,
+    "m": re.MULTILINE,
+    "s": re.DOTALL,
+    "x": re.VERBOSE,
+}
+
+
+def _compile_user_regexp(source: str, flags: int = 0) -> re.Pattern[str]:
+    """Compile a user-supplied regexp with Perl stow's character semantics.
+
+    re.ASCII makes \\w, \\d and \\s match the same characters as Perl's,
+    which runs its engine over undecoded bytes (Stow.pm has no `use utf8`).
+    Bracket expressions such as [[] draw a FutureWarning from re although
+    both engines match them identically and Perl prints nothing, so that
+    one warning is suppressed rather than leaked onto stderr.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        return re.compile(source, flags | re.ASCII)
+
+
+def _hoist_leading_flags(pattern: str) -> tuple[str, int]:
+    """Split a leading global flag group off a pattern, as compile flags.
+
+    Both implementations wrap the user's pattern in an anchoring group,
+    which pushes a leading (?i) off position 0 - where Perl still honors
+    it but Python's re rejects it. Hoisting the group into the compile
+    flags restores the meaning it has in both dialects; the anchors it
+    then also covers contain no letters, so nothing else changes.
+    """
+    m = _LEADING_FLAGS_RE.match(pattern)
+    if not m:
+        return pattern, 0
+    flags = 0
+    for letter in m.group(1):
+        flags |= _INLINE_FLAGS[letter]
+    return pattern[m.end() :], flags
+
+
+def _scope_leading_flags(pattern: str) -> str:
+    """Rewrite a leading (?i) group as the scoped (?i:...) form.
+
+    Ignore-file patterns are joined into one alternation, where a leading
+    flag group could not be hoisted for one alternative alone. Perl leaks
+    such a flag into every following alternative; scoping it to the
+    pattern that carries it is the reading users expect (see
+    docs/perl-differences.md #28).
+    """
+    m = _LEADING_FLAGS_RE.match(pattern)
+    if not m:
+        return pattern
+    return f"(?{m.group(1)}:{pattern[m.end() :]})"
+
 
 def _compile_option_pattern(pattern: str, option: str) -> re.Pattern[str]:
     """Anchor and compile a user-supplied ignore/defer/override pattern.
@@ -202,8 +276,11 @@ def _compile_option_pattern(pattern: str, option: str) -> re.Pattern[str]:
             f"(anchoring is applied automatically), "
             f"not {type(pattern).__name__}"
         )
+    if _POSIX_CLASS_RE.search(pattern):
+        raise StowError(f"Failed to compile regexp for --{option}: {_POSIX_CLASS_HINT}")
+    body, flags = _hoist_leading_flags(pattern)
     try:
-        return re.compile(_PATTERN_TEMPLATES[option].format(pattern))
+        return _compile_user_regexp(_PATTERN_TEMPLATES[option].format(body), flags)
     except re.error as e:
         raise StowError(f"Failed to compile regexp for --{option}: {e}") from e
 
@@ -1594,14 +1671,18 @@ def _compile_ignore_patterns(patterns: set[str]) -> IgnorePatterns:
     segment_regexp = None
     path_regexp = None
 
+    for pattern in patterns:
+        if _POSIX_CLASS_RE.search(pattern):
+            raise StowError(f"Failed to compile regexp: {_POSIX_CLASS_HINT}")
+
     try:
         if segment_patterns:
-            combined = "|".join(segment_patterns)
-            segment_regexp = re.compile(f"^({combined})$")
+            combined = "|".join(_scope_leading_flags(p) for p in segment_patterns)
+            segment_regexp = _compile_user_regexp(f"^({combined})$")
 
         if path_patterns:
-            combined = "|".join(path_patterns)
-            path_regexp = re.compile(f"(^|/)({combined})(/|$)")
+            combined = "|".join(_scope_leading_flags(p) for p in path_patterns)
+            path_regexp = _compile_user_regexp(f"(^|/)({combined})(/|$)")
     except re.error as e:
         # StowError produces a clean "stow: ERROR: ..." message instead of
         # a traceback when an ignore file contains a malformed pattern
