@@ -121,8 +121,19 @@ def perl_shellwords(line: str) -> list[str]:
     return [w for w in pieces if w is not None]
 
 
+# Perl derives its program name from $0 (bin/stow:469-470), so a renamed
+# copy or a symlink identifies itself under that name in the usage banner,
+# the SYNOPSIS line and --version. The "stow: ERROR:" prefix is NOT
+# derived - Perl hardcodes it in Stow::Util (lib/Stow/Util.pm:45) - which
+# is why library code keeps using PROGRAM_NAME.
+_program_name = PROGRAM_NAME
+
+
 def main() -> None:
     """Main entry point for stow command."""
+    global _program_name
+    _program_name = os.path.basename(sys.argv[0])
+
     configure_standard_streams()
     try:
         _main()
@@ -221,10 +232,10 @@ def _parse_bundled_options(
     A value-taking option (d, t) at the end of a bundle consumes the next
     command-line argument, so `-nt DIR` works like `-n -t DIR`.
 
-    Returns (action, next_arg_index, has_any_unknown_options,
-    should_show_help, should_show_version).
+    Returns (action, next_arg_index, had_option_error, should_show_help,
+    should_show_version).
     """
-    has_any_unknown_options = False
+    had_option_error = False
     should_show_help = False
     should_show_version = False
     chars = args[arg_index][1:]
@@ -239,12 +250,12 @@ def _parse_bundled_options(
         elif char == "p":
             options["compat"] = True
         elif char == "v":
-            m = re.match(r"\d+", rest)
-            if m:
-                options["verbose"] = int(m.group())
-                i += len(m.group())
-            else:
+            taken = _take_bundled_optint(rest)
+            if taken is None:
                 options["verbose"] = options.get("verbose", 0) + 1
+            else:
+                options["verbose"], consumed = taken
+                i += consumed
         elif char == "S":
             action = "stow"
         elif char == "D":
@@ -265,21 +276,66 @@ def _parse_bundled_options(
                 arg_index += 1
                 options["dir" if char == "d" else "target"] = args[arg_index]
             else:
-                show_usage_and_exit(f"Option {char} requires an argument")
+                print(f"Option {char} requires an argument", file=sys.stderr)
+                had_option_error = True
         else:
             # Like Perl, report every unknown letter and keep processing
             # the rest of the bundle before the fatal usage exit
             print(f"Unknown option: {char}", file=sys.stderr)
-            has_any_unknown_options = True
+            had_option_error = True
         i += 1
 
     return (
         action,
         arg_index,
-        has_any_unknown_options,
+        had_option_error,
         should_show_help,
         should_show_version,
     )
+
+
+# Getopt::Long's PAT_INT: an optional sign, then underscores and digits.
+# This is the whole grammar a --verbose/-v value has to satisfy, which is
+# why int() alone will not do: it would accept " 5" (Perl rejects it) and
+# reject "_4" and "3_0" (Perl accepts both).
+_GETOPT_INT_RE = re.compile(r"[-+]?_*[0-9][0-9_]*")
+
+
+def _parse_optint_value(value: str) -> int | None:
+    """Read an attached --verbose=N value like Getopt::Long does.
+
+    Returns None if the value is not a legal integer for the option, which
+    Getopt::Long reports and counts as an error. Underscores are stripped
+    from a fully matching value, so --verbose=3_0 sets level 30.
+    """
+    if not _GETOPT_INT_RE.fullmatch(value):
+        return None
+    return int(value.replace("_", ""))
+
+
+def _take_bundled_optint(rest: str) -> tuple[int, int] | None:
+    """Take a -v value off the front of a short-option bundle.
+
+    Returns (value, characters consumed), or None when the bundle simply
+    continues with more option letters (`-vx` is -v -x). Getopt::Long
+    numifies the matched text here instead of stripping underscores as
+    the attached long form does, so -v3_0 is level 3 and -v_4 is level 0.
+    """
+    m = _GETOPT_INT_RE.match(rest)
+    if not m:
+        return None
+    digits = re.match(r"[-+]?[0-9]+", m.group())
+    return (int(digits.group()) if digits else 0), m.end()
+
+
+def _strip_trailing_slashes(package: str) -> str:
+    """Perl's s{/+$}{} on a package name.
+
+    Perl's "$" - and Python's - also matches just before a final newline,
+    so a package directory literally named "a\\n" is still recognized when
+    shell completion writes it as "a/\\n".
+    """
+    return re.sub(r"/+$", "", package)
 
 
 def process_options() -> tuple[dict, list[str], list[str]]:
@@ -350,14 +406,24 @@ _OPTION_SPECS = [
 ]
 
 
+class _OptionError(Exception):
+    """One Getopt::Long option diagnostic.
+
+    Getopt::Long warns about a bad option, counts it and carries on
+    scanning, so every problem on the command line is reported before the
+    single usage exit at the end; raising this instead of exiting on the
+    spot is what reproduces that.
+    """
+
+
 def _find_long_option(name: str, allow_abbrev: bool) -> tuple[str, str, str] | None:
     """Resolve a long option name like Getopt::Long's find_option.
 
     An exact name/alias match wins; otherwise a unique prefix resolves via
-    auto_abbrev. A prefix matching several options is a fatal ambiguity
-    error. Returns (matched_name, primary_name, value_type) — matched_name
-    is the name as resolved (alias as given, or the full name a prefix
-    expanded to), which is what error messages use — or None if unknown.
+    auto_abbrev. A prefix matching several options raises _OptionError.
+    Returns (matched_name, primary_name, value_type) — matched_name is the
+    name as resolved (alias as given, or the full name a prefix expanded
+    to), which is what error messages use — or None if unknown.
     """
     for names, vtype in _OPTION_SPECS:
         if name in names:
@@ -373,7 +439,7 @@ def _find_long_option(name: str, allow_abbrev: bool) -> tuple[str, str, str] | N
         return None
     if len(hits) > 1:
         all_matched = sorted(nm for matched, _, _ in hits for nm in matched)
-        show_usage_and_exit(f"Option {name} is ambiguous ({', '.join(all_matched)})")
+        raise _OptionError(f"Option {name} is ambiguous ({', '.join(all_matched)})")
     matched, primary, vtype = hits[0]
     return matched[0], primary, vtype
 
@@ -394,6 +460,14 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
     # that, so packages and options may be interleaved either way.
     posixly_correct = "POSIXLY_CORRECT" in os.environ
 
+    # Perl scans the WHOLE argument list first and only then acts on what
+    # it found: `GetOptions(...) or usage('')`, then --help, then
+    # --version (bin/stow:614-624). So a bad option anywhere on the line
+    # beats an earlier --help, and --help beats --version.
+    had_option_error = False
+    want_help = False
+    want_version = False
+
     i = 0
 
     def add_package(pkg: str) -> None:
@@ -410,7 +484,7 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
     ) -> None:
         """Apply one resolved long option, consuming the following argument
         as its value where Getopt::Long would."""
-        nonlocal i, action
+        nonlocal i, action, want_help, want_version
         if vtype == "string":
             # An empty attached value ("--ignore=") is rejected like
             # Getopt::Long rejects it: an empty regex or path is never
@@ -423,7 +497,7 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
                 i += 1
                 value = args[i]
             else:
-                show_usage_and_exit(f"Option {given_name} requires an argument")
+                raise _OptionError(f"Option {given_name} requires an argument")
             if primary in ("ignore", "defer", "override"):
                 _validate_option_regex(value, primary)
                 options.setdefault(primary, []).append(value)
@@ -436,17 +510,17 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
             if not attached:
                 options["verbose"] = options.get("verbose", 0) + 1
             else:
-                try:
-                    options["verbose"] = int(attached)
-                except ValueError:
+                level = _parse_optint_value(attached)
+                if level is None:
                     # Abort like Perl instead of silently proceeding with
                     # a default level and modifying the filesystem
-                    show_usage_and_exit(
+                    raise _OptionError(
                         f'Value "{attached}" invalid for option verbose (number expected)'
                     )
+                options["verbose"] = level
         else:  # flag
             if attached is not None:
-                show_usage_and_exit(f"Option {given_name} does not take an argument")
+                raise _OptionError(f"Option {given_name} does not take an argument")
             if primary == "simulate":
                 options["simulate"] = True
             elif primary == "compat":
@@ -460,9 +534,9 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
             elif primary == "R":
                 action = "restow"
             elif primary == "help":
-                show_usage_and_exit()
+                want_help = True
             else:  # version
-                show_version_and_exit()
+                want_version = True
 
     while i < len(args):
         arg = args[i]
@@ -484,11 +558,15 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
             # character precedes it ("--=x" is the unknown option "=x")
             if "=" in name and not name.startswith("="):
                 name, attached = name.split("=", 1)
-            resolved = _find_long_option(name, allow_abbrev=not posixly_correct)
-            if resolved is None:
-                show_usage_and_exit(f"Unknown option: {name}")
-            given_name, primary, vtype = resolved
-            apply_long_option(given_name, primary, vtype, attached)
+            try:
+                resolved = _find_long_option(name, allow_abbrev=not posixly_correct)
+                if resolved is None:
+                    raise _OptionError(f"Unknown option: {name}")
+                given_name, primary, vtype = resolved
+                apply_long_option(given_name, primary, vtype, attached)
+            except _OptionError as e:
+                print(e, file=sys.stderr)
+                had_option_error = True
 
         # Support +n for simulate (backwards compat with Perl's Getopt::Long)
         # POSIXLY_CORRECT disables + prefix support
@@ -506,18 +584,22 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
             (
                 action,
                 i,
-                has_any_unknown_options,
-                should_show_help,
-                should_show_version,
+                bundle_error,
+                bundle_help,
+                bundle_version,
             ) = _parse_bundled_options(args, i, options, action)
-            if has_any_unknown_options:
-                show_usage_and_exit(exit_code=1)
-            if should_show_help:
-                show_usage_and_exit()
-            if should_show_version:
-                show_version_and_exit()
+            had_option_error = had_option_error or bundle_error
+            want_help = want_help or bundle_help
+            want_version = want_version or bundle_version
 
         i += 1
+
+    if had_option_error:
+        show_usage_and_exit(exit_code=1)
+    if want_help:
+        show_usage_and_exit()
+    if want_version:
+        show_version_and_exit()
 
     return (options, pkgs_to_unstow, pkgs_to_stow)
 
@@ -530,13 +612,13 @@ def sanitize_path_options(options: dict) -> None:
 
     if not os.path.isdir(options["dir"]):
         show_usage_and_exit(
-            f"{PROGRAM_NAME}: --dir value '{options['dir']}' is not a valid directory\n"
+            f"{_program_name}: --dir value '{options['dir']}' is not a valid directory\n"
         )
 
     if "target" in options:
         if not os.path.isdir(options["target"]):
             show_usage_and_exit(
-                f"{PROGRAM_NAME}: --target value '{options['target']}' is not a valid directory\n"
+                f"{_program_name}: --target value '{options['target']}' is not a valid directory\n"
             )
     else:
         target = parent(options["dir"])
@@ -546,7 +628,7 @@ def sanitize_path_options(options: dict) -> None:
 def check_packages(pkgs_to_stow: Sequence[str], pkgs_to_unstow: Sequence[str]) -> None:
     """Validate package names."""
     if not pkgs_to_stow and not pkgs_to_unstow:
-        show_usage_and_exit(f"{PROGRAM_NAME}: No packages to stow or unstow\n")
+        show_usage_and_exit(f"{_program_name}: No packages to stow or unstow\n")
 
     for package in itertools.chain(pkgs_to_stow, pkgs_to_unstow):
         if "/" in package:
@@ -620,9 +702,11 @@ def expand_environment_variables(path: str, source: str) -> str:
     # Braced form: Perl stow only expands ${NAME} when the braces contain
     # word/space characters ([\w\s]+), so shell-isms like ${VAR:-default}
     # stay literal instead of being looked up (and failing) as a variable
-    # named "VAR:-default".
-    path = re.sub(r"(?<!\\)\$\{([\w\s]+)}", replace_var, path)
-    path = re.sub(r"(?<!\\)\$(\w+)", replace_var, path)
+    # named "VAR:-default". re.ASCII keeps \w and \s to the characters
+    # Perl's match over undecoded bytes sees, so "$BASE" followed by a
+    # non-ASCII letter still ends the variable name at BASE.
+    path = re.sub(r"(?<!\\)\$\{([\w\s]+)}", replace_var, path, flags=re.ASCII)
+    path = re.sub(r"(?<!\\)\$(\w+)", replace_var, path, flags=re.ASCII)
     path = path.replace("\\$", "$")
 
     return path
@@ -679,14 +763,14 @@ def show_usage_and_exit(
     if msg:
         print(msg, file=sys.stderr)
 
-    print(f"""{PROGRAM_NAME} (GNU Stow) version {VERSION}
+    print(f"""{_program_name} (GNU Stow) version {VERSION}
 
 Stow-Python is a Python reimplementation of GNU Stow.
 Original GNU Stow by Bob Glickstein, Guillaume Morin, Kahlil Hodgson, Adam Spiers, and others.
 
 SYNOPSIS:
 
-    {PROGRAM_NAME} [OPTION ...] [-D|-S|-R] PACKAGE ... [-D|-S|-R] PACKAGE ...
+    {_program_name} [OPTION ...] [-D|-S|-R] PACKAGE ... [-D|-S|-R] PACKAGE ...
 
 OPTIONS:
 
@@ -729,7 +813,7 @@ def show_version_and_exit() -> NoReturn:
     """Print version and exit."""
     # Byte-identical to Perl stow's --version output so that scripts
     # matching on "GNU Stow" keep working
-    print(f"{PROGRAM_NAME} (GNU Stow) version {VERSION}")
+    print(f"{_program_name} (GNU Stow) version {VERSION}")
     sys.exit(0)
 
 
