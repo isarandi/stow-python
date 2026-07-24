@@ -616,29 +616,31 @@ def expand_environment_variables(path: str, source: str) -> str:
 
 
 def expand_tilde_to_homedir(path: str) -> str:
-    """Expand tilde to user's home directory path."""
-    if "\\~" in path:
-        return path.replace("\\~", "~")
+    """Expand tilde to user's home directory path.
 
-    if not path.startswith("~"):
-        return path
+    Same order as Perl's expand_tilde: the bare leading ~/~username is
+    expanded first, then every escaped tilde (\\~) anywhere in the path
+    is unescaped (s/\\\\~/~/g), so a later \\~ does not suppress
+    expansion of the leading ~.
+    """
+    if path.startswith("~"):
+        # Split ~username/rest into parts
+        tilde_part, slash, rest = path.partition("/")
+        username = tilde_part.removeprefix("~")
 
-    # Split ~username/rest into parts
-    tilde_part, slash, rest = path.partition("/")
-    username = tilde_part.removeprefix("~")
+        if username:
+            home = get_homedir_from_passwd(username=username)
+        else:
+            home = (
+                    os.environ.get("HOME")
+                    or os.environ.get("LOGDIR")
+                    or get_homedir_from_passwd()
+            )
 
-    if username:
-        home = get_homedir_from_passwd(username=username)
-    else:
-        home = (
-                os.environ.get("HOME")
-                or os.environ.get("LOGDIR")
-                or get_homedir_from_passwd()
-        )
+        if home:
+            path = home + slash + rest
 
-    if not home:
-        return path
-    return home + slash + rest
+    return path.replace("\\~", "~")
 
 
 def get_homedir_from_passwd(username: str | None = None, uid: int | None = None) -> str | None:
