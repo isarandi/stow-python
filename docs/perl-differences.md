@@ -111,7 +111,7 @@ is no divergence for chkstow.
 
 **Result:** Identical behavior - file is read or skipped. Different syscalls in strace output.
 
-**Note:** This is a deliberate simplification. The Pythonic approach is cleaner and behaviorally equivalent. For syscall-exact matching, see the `pythonic-bug4bug` branch.
+**Note:** This is a deliberate simplification. The Pythonic approach is cleaner and behaviorally equivalent. For syscall-exact matching, see the `bug4bug` branch.
 
 ## 8. lstat Before unlink (Perl Safety Check)
 

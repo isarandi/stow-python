@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [pythonic]
+    branches: [main]
   pull_request:
-    branches: [pythonic]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
