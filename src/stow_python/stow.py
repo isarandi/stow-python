@@ -1185,14 +1185,32 @@ class _Stower:
         for file_path in (local_stow_ignore, global_stow_ignore):
             if os.path.exists(file_path):
                 debug(5, 1, f"Using ignore file: {file_path}")
-                if file_path not in self._ignore_file_cache:
-                    self._ignore_file_cache[file_path] = _read_ignore_file(file_path)
-                return self._ignore_file_cache[file_path]
+                return self._get_ignore_regexps_from_file(file_path)
             else:
                 debug(5, 1, f"{file_path} didn't exist")
 
         debug(4, 1, "Using built-in ignore list")
         return _get_default_global_ignore_regexps()
+
+    def _get_ignore_regexps_from_file(self, file_path: str) -> IgnorePatterns:
+        """Return one ignore file's compiled regexps, memoized.
+
+        The cache is per stower instance: file_path is relative to the
+        target directory, so a module-wide cache could hand one tree's
+        patterns to an operation on another. A failed open is deliberately
+        NOT memoized (Perl returns before its memo assignment), so a file
+        that only becomes readable mid-run still takes effect.
+        """
+        if file_path in self._ignore_file_cache:
+            debug(4, 2, f"Using memoized regexps from {file_path}")
+            return self._ignore_file_cache[file_path]
+
+        patterns = _read_ignore_file(file_path)
+        if patterns is None:
+            return IgnorePatterns(None, None)
+
+        self._ignore_file_cache[file_path] = patterns
+        return patterns
 
     def _should_defer(self, path: str) -> bool:
         """Determine if the given path matches a regex in our defer list."""
