@@ -339,6 +339,8 @@ def build_executable(
     # The artifact must at minimum byte-compile before it is written out
     compile(output_content, str(output_file), "exec")
 
+    # bin/ is gitignored, so a fresh checkout has no bin/ directory at all
+    output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text(output_content)
     output_file.chmod(0o755)
 
