@@ -65,7 +65,12 @@ from stow_python.types import (
     StowInternalError,
     StowCLIError,
 )
+
+# __version__ is the GNU Stow version whose behavior is reproduced;
+# __release__ identifies the stow-python release (matches the package
+# version on PyPI, e.g. "2.4.1.post1").
 from stow_python.util import VERSION as __version__
+from stow_python.util import RELEASE as __release__
 
 # CLI entry point
 from stow_python.cli import main
@@ -80,5 +85,6 @@ __all__ = [
     "StowInternalError",
     "StowCLIError",
     "__version__",
+    "__release__",
     "main",
 ]

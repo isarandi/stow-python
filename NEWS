@@ -47,6 +47,11 @@ reproduced; the .postN suffix counts stow-python releases on top of it.
 
   - The sdist now ships NEWS, the man pages, and the complete
     runnable test suite.
+  - The built single-file executables now embed the full release
+    identifier ("stow-python release 2.4.1.post1") in a header
+    comment for support and triage purposes.  The output of
+    "stow --version" is unchanged and still byte-identical to
+    GNU Stow.
   - CI now runs on the product branch and installs the package under
     test before running the test suite.
 

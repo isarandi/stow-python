@@ -39,7 +39,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 # Order matters: dependencies must come before dependents
 STOW_MODULES = ["types", "util", "stow", "cli"]
@@ -72,6 +71,7 @@ COPYRIGHT_HEADER = """\
 
 # AUTO-GENERATED from stow_python modules - do not edit directly.
 # Run scripts/build_single_file.py to regenerate.
+# stow-python release {release} (behaves as GNU Stow {version})
 """
 
 STOW_DOCSTRING = '''
@@ -106,7 +106,66 @@ if __name__ == "__main__":
 """
 
 # One (module, asname) or (name, asname) pair of an import statement
-_ImportPair = tuple[str, Optional[str]]
+_ImportPair = tuple[str, str | None]
+
+
+def read_version_constants(util_path: Path) -> tuple[str, str]:
+    """Extract RELEASE and VERSION from util.py for the artifact header.
+
+    The header comment is the only release identification a standalone
+    single-file artifact carries (--version output is byte-identical to
+    GNU Stow by design), so a missing constant must fail the build."""
+    content = util_path.read_text()
+    values = {}
+    for name in ("VERSION", "RELEASE"):
+        m = re.search(rf'^{name} = "([^"]+)"$', content, re.MULTILINE)
+        if not m:
+            print(f"Error: {name} constant not found in {util_path}", file=sys.stderr)
+            sys.exit(1)
+        values[name] = m.group(1)
+    return values["RELEASE"], values["VERSION"]
+
+
+def check_no_top_level_collisions(module_asts: dict[str, ast.Module]) -> None:
+    """Fail the build if the concatenated modules bind one top-level name
+    to two different things (two definitions, or a definition and an
+    external import): the later binding would silently shadow the earlier
+    one in the single-file artifact, even though the package form is fine.
+    The same external import appearing in several modules is not a
+    collision - the merged import block binds it once."""
+    source_of: dict[str, str] = {}
+
+    def record(module_name: str, name: str, source: str) -> None:
+        previous = source_of.setdefault(name, source)
+        if previous != source:
+            print(
+                f"Error: top-level name collision in {module_name}.py: "
+                f"{name} is bound by both '{previous}' and '{source}'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    for module_name, tree in module_asts.items():
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    record(module_name, bound, f"import {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module == "__future__" or module.split(".")[0] == "stow_python":
+                    continue
+                for alias in node.names:
+                    bound = alias.asname or alias.name
+                    record(module_name, bound, f"from {module} import {alias.name}")
+            elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                record(module_name, node.name, f"definition in {module_name}.py")
+            elif isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        record(module_name, t.id, f"definition in {module_name}.py")
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                record(module_name, node.target.id, f"definition in {module_name}.py")
 
 
 def extract_imports(
@@ -166,7 +225,7 @@ def render_imports(
     `from` import per module with its names merged across all source
     modules, everything sorted for a deterministic artifact."""
 
-    def fmt(name: str, asname: Optional[str]) -> str:
+    def fmt(name: str, asname: str | None) -> str:
         return f"{name} as {asname}" if asname else name
 
     def pair_key(pair: _ImportPair) -> tuple[str, str]:
@@ -212,6 +271,7 @@ def build_executable(
     plain_imports: set[_ImportPair] = set()
     from_imports: dict[str, set[_ImportPair]] = {}
     module_contents: list[str] = []
+    module_asts: dict[str, ast.Module] = {}
 
     for module_name in modules:
         module_path = stow_python_dir / f"{module_name}.py"
@@ -220,6 +280,7 @@ def build_executable(
             sys.exit(1)
 
         content = module_path.read_text()
+        module_asts[module_name] = ast.parse(content)
 
         # Extract imports (and the docstring) and clean the content
         module_plain, module_from, content = extract_imports(content)
@@ -233,6 +294,16 @@ def build_executable(
         content = re.sub(
             r"\nif __name__ == ['\"]__main__['\"]:\n    main\(\)\n?", "", content
         )
+        # The removal above matches the block's exact text; if the block is
+        # ever reformatted, it must fail the build rather than survive
+        # embedded mid-artifact where it would execute during import
+        if "__main__" in content:
+            print(
+                f"Error: __main__ block in {module_name}.py did not match the "
+                "removal pattern in build_single_file.py",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
         # Add section marker for multi-module builds
         if len(modules) > 1:
@@ -243,12 +314,15 @@ def build_executable(
         else:
             module_contents.append(content.strip())
 
+    check_no_top_level_collisions(module_asts)
+
     # Build the final output
+    release, version = read_version_constants(stow_python_dir / "util.py")
     output_parts = [
         "#!/usr/bin/env python3",
         "# -*- coding: utf-8 -*-",
         "",
-        COPYRIGHT_HEADER,
+        COPYRIGHT_HEADER.format(release=release, version=version),
         docstring,
         "from __future__ import annotations",
         "",

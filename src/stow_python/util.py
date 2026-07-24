@@ -45,6 +45,14 @@ from stow_python.types import StowError
 VERSION = "2.4.1"
 PROGRAM_NAME = "stow"
 
+# Full stow-python release identifier. User-facing --version output
+# deliberately reports only VERSION, byte-identical to GNU Stow (see
+# docs/perl-differences.md #17); RELEASE identifies the stow-python
+# release for support and triage, and is stamped into the built
+# single-file artifacts. Must match [project] version in pyproject.toml
+# (pinned by a test).
+RELEASE = "2.4.1.post1"
+
 # Planning and execution chdir into the target tree (mirroring Perl stow's
 # syscall sequence), which is process-global state; this lock serializes
 # concurrent stow operations within one process. Re-entrant so that nested

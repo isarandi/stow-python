@@ -158,3 +158,29 @@ class TestInternalErrorHandler:
         assert (
             "See https://github.com/isarandi/stow-python for how to do this." in stderr
         )
+
+
+class TestReleaseIdentification:
+    """RELEASE is the only runtime channel identifying a stow-python
+    release (--version stays byte-identical to GNU Stow), so it must
+    agree with the packaging metadata and reach the built artifact."""
+
+    def test_release_matches_pyproject(self):
+        pyproject_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "pyproject.toml"
+        )
+        with open(pyproject_path) as f:
+            content = f.read()
+        m = re.search(r'(?m)^version = "([^"]+)"$', content)
+        assert m, "version not found in pyproject.toml"
+        from stow_python.util import RELEASE, VERSION
+
+        assert RELEASE == m.group(1)
+        assert RELEASE.startswith(VERSION)
+
+    def test_release_stamped_into_artifact(self):
+        from stow_python.util import RELEASE
+
+        with open(STOW_SCRIPT) as f:
+            header = f.read(2048)
+        assert f"stow-python release {RELEASE}" in header
