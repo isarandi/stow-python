@@ -144,3 +144,25 @@ jobs:
 
       - name: Validate docs/stow.texi
         run: makeinfo --no-split -o /dev/null docs/stow.texi
+
+  # Build the sdist and wheel on every push so MANIFEST or metadata
+  # breakage surfaces here, not during an actual release.
+  package:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check metadata
+        run: twine check --strict dist/*
