@@ -83,11 +83,13 @@ Run identical scenarios on both Python and Perl, compare everything.
 Precisely what the oracle comparison does and does not guarantee:
 
 - **Output comparison** (stdout and stderr) is byte-exact modulo
-  exactly three documented normalizations:
+  exactly two documented normalizations:
   1. Stow-Python branding lines are rewritten (program name/version
      lines differ between the two implementations by design).
   2. Perl's newline-in-filename warnings are filtered from both sides.
-  3. Undecodable bytes are replaced during UTF-8 decoding.
+  Output is decoded with `errors="surrogateescape"`, so undecodable
+  bytes survive decoding losslessly and the comparison is
+  byte-faithful.
 - **Tree-state snapshot** covers entry types, file content bytes,
   symlink destinations, permissions, and ownership — but NOT mtimes
   (the two runs create their trees at different times, so absolute
@@ -174,25 +176,31 @@ Generate random inputs with Hypothesis, verify Python matches Perl.
 
 ### Strategies
 
-- Random package names (filtered for CLI safety)
-- Random directory structures (depth, breadth)
-- Random file contents
-- Random symlink targets
-- Random ignore patterns
-- Random option combinations
+- Random filesystem trees, with file, directory, and package names
+  drawn from restricted alphabets
+- Operations: stow, unstow-after-stow, and restow
+- Options exercised one at a time: `verbose`, `dotfiles`,
+  `no-folding`, `adopt`
 
-### Filters (Documented Differences)
+Not currently generated: random symlink targets, random ignore
+patterns, and random option combinations.
 
-See `docs/perl-differences.md` for edge cases we intentionally filter:
-- Package names starting with `-` or `+`
-- Path components `.` or `..`
-- Newlines in paths (Perl bug)
+### Filters (Documented Exclusions)
 
-## Layer 5: Extreme/Stress Tests
+The name alphabets exclude, by construction:
+- NUL bytes and `/`
+- Names starting with `-` or `+`
+- The path components `.` and `..`
+- Names ending in `~`
+
+## Layer 5: Extreme/Stress Tests (planned)
 
 **⚠️ WARNING: Run in Docker/VM only - may damage host filesystem**
 
-**Location:** `tests/test_extreme.py` (Docker-only)
+**Status:** Not yet implemented. The detailed implementation plan,
+including the Docker environment, is in
+[EXTREME_TESTS_PLAN.md](EXTREME_TESTS_PLAN.md). The scenario lists
+below summarize what it will cover.
 
 ### Filesystem Limits
 
@@ -276,96 +284,47 @@ of both implementations.
 □ Restow of large package set
 ```
 
-## Docker Test Environment
+## Selecting Test Subsets
 
-For extreme tests that could damage the host:
+No pytest markers are registered (`pytest.ini_options` defines only
+`testpaths` and `python_files`); subsets are selected by test file
+path instead:
 
-```dockerfile
-# tests/Dockerfile.extreme
-FROM python:3.12-slim
-
-RUN apt-get update && apt-get install -y \
-    perl \
-    stow \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create small tmpfs for disk-full tests
-RUN mkdir /small-disk
-
-WORKDIR /code
-COPY . .
-
-# Run with: --tmpfs /small-disk:size=1M
-CMD ["pytest", "tests/test_extreme.py", "-v"]
-```
-
-Run extreme tests:
 ```bash
-docker build -f tests/Dockerfile.extreme -t stow-extreme .
-docker run --rm \
-    --tmpfs /small-disk:size=1M \
-    stow-extreme
-```
-
-## Test Markers
-
-```python
-# In conftest.py
-import pytest
-
-def pytest_configure(config):
-    config.addinivalue_line("markers", "slow: marks tests as slow")
-    config.addinivalue_line("markers", "extreme: marks tests requiring Docker")
-    config.addinivalue_line("markers", "oracle: marks tests comparing to Perl")
-
-# Usage:
-@pytest.mark.extreme
-def test_hundred_thousand_files():
-    ...
-
-@pytest.mark.slow
-def test_deep_nesting():
-    ...
-```
-
-Run specific test categories:
-```bash
-pytest tests/ -m "not extreme"           # Skip extreme tests
-pytest tests/ -m "oracle"                 # Only oracle tests
-pytest tests/ -m "extreme" --docker      # Extreme in Docker
+pytest tests/ --ignore=tests/test_oracle_hypothesis.py   # skip the slow property-based tests
+pytest tests/test_oracle.py tests/test_oracle_chkstow.py # only the scenario oracle tests
+pytest tests/test_stow_both.py                           # a single oracle test file
 ```
 
 ## Coverage Goals
 
-| Category | Target | Current |
-|----------|--------|---------|
-| Line coverage | >90% | ~71% |
-| Branch coverage | >85% | TBD |
-| Oracle scenarios | 100+ | ~50 |
-| Hypothesis examples | 1000+/test | 100 |
+| Category | Target |
+|----------|--------|
+| Line coverage | >90% |
+| Branch coverage | >85% |
+| Oracle scenarios | 100+ |
+| Hypothesis examples | 1000+/test |
+
+To measure the current line coverage, run:
+
+```bash
+pytest --cov=stow_python tests/
+```
 
 ## Continuous Integration
 
-```yaml
-# .github/workflows/test.yml
-jobs:
-  unit-tests:
-    strategy:
-      matrix:
-        python: ["3.10", "3.11", "3.12", "3.13"]
-    steps:
-      - run: pytest tests/ -m "not extreme and not slow"
+The workflow is `.github/workflows/ci.yml`, with five jobs:
 
-  oracle-tests:
-    steps:
-      - run: ./tests/get_gnu_stow_for_testing.sh
-      - run: pytest tests/ -m "oracle"
-
-  extreme-tests:
-    steps:
-      - run: docker build -f tests/Dockerfile.extreme -t stow-extreme .
-      - run: docker run --rm --tmpfs /small-disk:size=1M stow-extreme
-```
+- **download-stow**: builds the Perl GNU Stow oracle via
+  `tests/get_gnu_stow_for_testing_identical_behavior.sh` (cached) and
+  uploads it as an artifact for the test jobs.
+- **test**: matrix over Python 3.10-3.14 on Ubuntu; installs the
+  package under test, fetches the oracle artifact, ensures strace is
+  available, and runs the full test suite.
+- **test-macos**: single-version run on macOS, without strace.
+- **lint**: `ruff check`, `ruff format --check` (ruff 0.14.10) and
+  mypy 1.19.1.
+- **docs**: validates `docs/stow.texi` with makeinfo.
 
 ## Adding New Tests
 

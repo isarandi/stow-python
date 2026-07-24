@@ -218,8 +218,8 @@ Conflicts occur when stow cannot safely proceed:
 Conflicts are collected per-package:
 ```python
 self.conflicts = {
-    "emacs": ["existing target is not a symlink: bin/emacs"],
-    "vim": ["existing target owned by other package: share/doc"],
+    "emacs": ["existing target is not owned by stow: bin/emacs"],
+    "vim": ["existing target is stowed to a different package: share/doc => ../stow/emacs/share/doc"],
 }
 ```
 
@@ -264,11 +264,10 @@ This allows packages to store dotfiles without the leading dot.
 ```
 StowError (base)
 ├── StowInternalError  # Internal bug
-├── StowConflictError     # Conflicts detected
-└── StowCLIError          # CLI usage error
+└── StowCLIError       # CLI usage error
 ```
 
-The CLI catches these and formats appropriate error messages.
+The CLI catches these and formats appropriate error messages. Conflicts are not exceptions: they are reported via `StowResult.conflicts` (with `success=False`), never raised.
 
 ## CLI Structure
 
@@ -278,7 +277,7 @@ The CLI catches these and formats appropriate error messages.
 - Environment variable expansion
 - Main entry point
 
-Option parsing uses if/elif chains for both long options and bundled short options (`-npvS`).
+Option parsing is driven by a declarative option table (`_OPTION_SPECS`) combined with a hand-written resolver that emulates Getopt::Long's matching rules and a separate parser for bundled short options (`-npvS`).
 
 ## chkstow Module
 

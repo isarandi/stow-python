@@ -29,13 +29,15 @@ After this, you can simply run the `stow` command since the executable will be i
 
 The version number mirrors the GNU Stow version whose behavior is reproduced: `2.4.1.post1` behaves like GNU Stow 2.4.1, and the `.postN` suffix increments with each stow-python release on top of that behavior.
 
+When GNU Stow releases a new version, stow-python will port and verify that behavior and adopt the new base version number; `.postN` releases contain stow-python-only changes on top of the current base behavior.
+
 ## Use
 
 Since Stow-Python is an exact reimplementation of GNU Stow, you can refer to the [GNU Stow manual](https://www.gnu.org/software/stow/manual/) for all options and usage details, or see `stow --help`.
 
 ## Documentation
 
-An adapted Texinfo manual is included as [docs/stow.texi](docs/stow.texi) (builds `stow-python.info`), and man pages for `stow` and `chkstow` are in [docs/man/](docs/man/). The minor known behavioral differences from the Perl implementation are documented in [docs/perl-differences.md](docs/perl-differences.md).
+An adapted Texinfo manual is included as [docs/stow.texi](docs/stow.texi) (builds `stow-python.info`), and man pages for `stow` and `chkstow` are in [docs/man/](docs/man/). The minor known behavioral differences from the Perl implementation are documented in [docs/perl-differences.md](docs/perl-differences.md). Note for distribution packagers: pip does not install the man pages or the Info manual, so packages should install `docs/man/*.8` and build `stow-python.info` from `docs/stow.texi` with `makeinfo`.
 
 To use the `chkstow` diagnostic tool for common stow directory problems, you can either download it directly like the `stow` executable, or use pip, it is automatically installed with stow-python. The `stow` and `chkstow` executables do not depend on each other, both are standalone with Python as the sole dependency.
 
@@ -74,7 +76,7 @@ This bundles all modules into standalone scripts with no dependencies beyond Pyt
 ## Run the tests
 
 ```bash
-pip install stow-python[tests]  # installs pytest and hypothesis
+pip install -e ".[tests]"  # installs pytest and hypothesis
 pytest tests/
 
 # For oracle tests (comparing against the Perl-based GNU Stow), install GNU Stow first:

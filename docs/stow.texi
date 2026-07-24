@@ -8,9 +8,9 @@
 @c @footnotestyle separate
 @c %**end of header
 
-@set UPDATED 8 September 2024
-@set EDITION 2.4.1
-@set VERSION 2.4.1
+@set UPDATED 22 July 2026
+@set EDITION 2.4.1.post1
+@set VERSION 2.4.1.post1
 
 @ifinfo
 @end ifinfo

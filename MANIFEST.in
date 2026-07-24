@@ -2,6 +2,7 @@ include NEWS
 include AUTHORS
 include CONTRIBUTING.md
 include docs/*.md
+exclude docs/EXTREME_TESTS_PLAN.md
 include docs/stow.texi
 include docs/man/*.8
 include scripts/build_single_file.py
