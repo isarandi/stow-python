@@ -539,16 +539,22 @@ def get_config_file_options() -> tuple[dict, list[str], list[str]]:
     stowrc_candidate_paths = [".stowrc"]
 
     home = os.environ.get("HOME")
-    if home:
-        stowrc_candidate_paths.insert(0, os.path.join(home, ".stowrc"))
+    if home is not None:
+        # Perl tests defined($ENV{HOME}) and interpolates, so HOME="" makes
+        # it probe "/.stowrc" rather than skipping the home candidate
+        stowrc_candidate_paths.insert(0, f"{home}/.stowrc")
 
     for file_path in stowrc_candidate_paths:
         try:
-            with open(file_path) as f:
+            # Byte-transparent, "\n"-delimited records, exactly as Perl
+            # reads the file: a non-UTF-8 byte must not abort the run, and
+            # a bare CR inside a quoted value must not split the line
+            with open(file_path, errors="surrogateescape", newline="\n") as f:
                 for line in f:
                     # Parse like Perl's shellwords so .stowrc files
-                    # written for GNU Stow behave identically
-                    defaults.extend(perl_shellwords(line.rstrip("\n\r")))
+                    # written for GNU Stow behave identically; chomp
+                    # removes the one newline and nothing else
+                    defaults.extend(perl_shellwords(line.removesuffix("\n")))
         except IsADirectoryError as e:
             raise StowCLIError(f"Could not open {file_path} for reading") from e
         except OSError:

@@ -80,6 +80,14 @@ from stow_python.util import (
 LOCAL_IGNORE_FILE = ".stow-local-ignore"
 GLOBAL_IGNORE_FILE = ".stow-global-ignore"
 
+# Perl: $regexps{"^/\Q$LOCAL_IGNORE_FILE\E\$"}++ - a local ignore list must
+# always stay inside its own package, so it is never stowed
+_SELF_IGNORE_PATTERN = "^/" + re.escape(LOCAL_IGNORE_FILE) + "$"
+
+# Perl's \s over undecoded bytes; str.strip()/re's \s would also eat
+# non-ASCII whitespace such as U+00A0 and ignore files Perl stows
+_ASCII_WHITESPACE = " \t\n\r\f\v"
+
 
 # =============================================================================
 # Public API
@@ -1535,28 +1543,42 @@ class _Stower:
 # =============================================================================
 
 
-def _read_ignore_file(file_path: str) -> IgnorePatterns:
-    """Read and parse ignore file, returning compiled regexps.
+def _read_ignore_file(file_path: str) -> IgnorePatterns | None:
+    """Read and parse an ignore file, returning compiled regexps.
 
-    Caching lives in _Stower._ignore_file_cache, per stower instance:
-    file_path is relative to the target directory, so a cross-instance
-    cache could hand one tree's patterns to an operation on another."""
+    Returns None if the file could not be opened, mirroring Perl's
+    `return undef` (Stow.pm:1556) - which happens before its memo
+    assignment, so the caller must not cache that outcome.
+
+    The file is read byte-transparently (surrogateescape) with "\\n" as
+    the only record separator, because Perl reads undecoded bytes in
+    \\n-delimited records: a non-UTF-8 byte must not abort the run, and a
+    bare CR must not split one pattern into two.
+    """
     try:
-        with open(file_path) as f:
-            patterns: set[str] = set()
-            for line in f:
-                line = line.strip()
-                if line.startswith("#") or not line:
-                    continue
-                line = re.sub(r"\s+#.+", "", line)
-                line = line.replace("\\#", "#")
-                patterns.add(line)
+        f = open(file_path, errors="surrogateescape", newline="\n")
+    except IsADirectoryError:
+        # Perl's open() on a directory succeeds and the read loop yields
+        # nothing, so only the hardcoded self-ignore pattern applies: the
+        # entry is skipped and the built-in ignore list stays bypassed.
+        return _compile_ignore_patterns({_SELF_IGNORE_PATTERN})
+    except OSError as e:
+        debug(4, 2, f"Failed to open {file_path}: {e.strerror}")
+        return None
 
-            # Always ignore the local ignore file itself
-            patterns.add("^/" + re.escape(LOCAL_IGNORE_FILE) + "$")
-            return _compile_ignore_patterns(patterns)
-    except OSError:
-        return IgnorePatterns(None, None)
+    with f:
+        patterns: set[str] = set()
+        for line in f:
+            line = line.strip(_ASCII_WHITESPACE)
+            if line.startswith("#") or not line:
+                continue
+            line = re.sub(f"[{_ASCII_WHITESPACE}]+#.+", "", line)
+            line = line.replace("\\#", "#")
+            patterns.add(line)
+
+    # Always ignore the local ignore file itself
+    patterns.add(_SELF_IGNORE_PATTERN)
+    return _compile_ignore_patterns(patterns)
 
 
 def _compile_ignore_patterns(patterns: set[str]) -> IgnorePatterns:
@@ -1618,12 +1640,12 @@ _darcs
 """
     patterns: set[str] = set()
     for line in default_patterns.strip().split("\n"):
-        line = line.strip()
+        line = line.strip(_ASCII_WHITESPACE)
         if line.startswith("#") or not line:
             continue
-        line = re.sub(r"\s+#.+", "", line)
+        line = re.sub(f"[{_ASCII_WHITESPACE}]+#.+", "", line)
         line = line.replace("\\#", "#")
         patterns.add(line)
 
-    patterns.add("^/" + re.escape(LOCAL_IGNORE_FILE) + "$")
+    patterns.add(_SELF_IGNORE_PATTERN)
     return _compile_ignore_patterns(patterns)
