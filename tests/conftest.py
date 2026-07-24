@@ -244,8 +244,8 @@ class StowTestEnv:
             env=run_env,
         )
         stdout, stderr = proc.communicate()
-        stdout_str = stdout.decode("utf-8", errors="replace")
-        stderr_str = stderr.decode("utf-8", errors="replace")
+        stdout_str = stdout.decode("utf-8", errors="surrogateescape")
+        stderr_str = stderr.decode("utf-8", errors="surrogateescape")
         return proc.returncode, stdout_str, stderr_str
 
     def run_python_stow(self, args, env=None):
@@ -265,8 +265,8 @@ class StowTestEnv:
             env=run_env,
         )
         stdout, stderr = proc.communicate()
-        stdout_str = stdout.decode("utf-8", errors="replace")
-        stderr_str = stderr.decode("utf-8", errors="replace")
+        stdout_str = stdout.decode("utf-8", errors="surrogateescape")
+        stderr_str = stderr.decode("utf-8", errors="surrogateescape")
         return proc.returncode, stdout_str, stderr_str
 
     def run_perl_chkstow(self, args, env=None):
@@ -288,8 +288,8 @@ class StowTestEnv:
             env=run_env,
         )
         stdout, stderr = proc.communicate()
-        stdout_str = stdout.decode("utf-8", errors="replace")
-        stderr_str = stderr.decode("utf-8", errors="replace")
+        stdout_str = stdout.decode("utf-8", errors="surrogateescape")
+        stderr_str = stderr.decode("utf-8", errors="surrogateescape")
         return proc.returncode, stdout_str, stderr_str
 
     def run_python_chkstow(self, args, env=None):
@@ -308,8 +308,8 @@ class StowTestEnv:
             env=run_env,
         )
         stdout, stderr = proc.communicate()
-        stdout_str = stdout.decode("utf-8", errors="replace")
-        stderr_str = stderr.decode("utf-8", errors="replace")
+        stdout_str = stdout.decode("utf-8", errors="surrogateescape")
+        stderr_str = stderr.decode("utf-8", errors="surrogateescape")
         return proc.returncode, stdout_str, stderr_str
 
     def reset_target(self):
@@ -976,7 +976,7 @@ def find_unexpected_syscall_diffs(perl_ops, python_ops):
         return f"Operation count mismatch: Perl {len(perl_ops)} vs Python {len(python_ops)}"
 
     unexpected = []
-    for i, (perl_op, python_op) in enumerate(zip(perl_ops, python_ops)):
+    for i, (perl_op, python_op) in enumerate(zip(perl_ops, python_ops, strict=True)):
         if perl_op != python_op:
             if not is_expected_syscall_diff(perl_op, python_op):
                 unexpected.append(
@@ -1041,8 +1041,8 @@ def run_with_strace(cmd, cwd, env, strace_output_file):
     stdout, stderr = proc.communicate()
     return (
         proc.returncode,
-        stdout.decode("utf-8", errors="replace"),
-        stderr.decode("utf-8", errors="replace"),
+        stdout.decode("utf-8", errors="surrogateescape"),
+        stderr.decode("utf-8", errors="surrogateescape"),
     )
 
 
