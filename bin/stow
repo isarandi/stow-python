@@ -2803,39 +2803,39 @@ def expand_environment(path, source):
 def expand_tilde(path):
     """
     Expands tilde to user's home directory path.
+
+    Same order as Perl's expand_tilde: the bare leading ~ or ~username
+    is expanded first, then escaped tildes (backslash-tilde) are
+    unescaped everywhere in the path, so a leading escaped tilde stays
+    a literal ~ and a later one does not suppress expansion of the
+    leading ~.
     """
-    # Handle escaped tilde first - must be done before checking for ~
-    # so that \~/path returns ~/path (literal tilde)
-    if '\\~' in path:
-        path = path.replace('\\~', '~')
-        return path
-
-    if not path.startswith('~'):
-        return path
-
-    # Handle ~user syntax
-    match = re.match(r'^~([^/]*)', path)
-    if match:
-        user = match.group(1)
-        if user:
-            # ~username - get that user's home directory
-            try:
-                home = pwd.getpwnam(user)[5]
-            except KeyError:
-                # User not found, return unchanged
-                return path
-        else:
-            # Just ~ - get current user's home
-            home = os.environ.get('HOME') or os.environ.get('LOGDIR')
-            if not home:
+    if path.startswith('~'):
+        # Handle ~user syntax
+        match = re.match(r'^~([^/]*)', path)
+        if match:
+            user = match.group(1)
+            if user:
+                # ~username - get that user's home directory
                 try:
-                    home = pwd.getpwuid(os.getuid())[5]
+                    home = pwd.getpwnam(user)[5]
                 except KeyError:
-                    return path
+                    # User not found, leave the path unchanged
+                    home = None
+            else:
+                # Just ~ - get current user's home
+                home = os.environ.get('HOME') or os.environ.get('LOGDIR')
+                if not home:
+                    try:
+                        home = pwd.getpwuid(os.getuid())[5]
+                    except KeyError:
+                        home = None
 
-        path = home + path[len(match.group(0)):]
+            if home:
+                path = home + path[len(match.group(0)):]
 
-    return path
+    # Unescape escaped tildes only after expansion, like Perl
+    return path.replace('\\~', '~')
 
 
 def usage(msg=None, exit_code=None):

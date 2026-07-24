@@ -333,6 +333,25 @@ class TestExpandTilde:
         result = expand_tilde('\\~/path')
         assert result == '~/path', 'escaped tilde'
 
+    def test_escaped_tilde_after_leading_tilde(self, test_env):
+        """A later \\~ must not suppress expansion of the leading ~.
+
+        Perl expands the leading tilde first and only then unescapes
+        \\~ globally (s/\\\\~/~/g), so ~/x\\~y becomes $HOME/x~y.
+        """
+        result = expand_tilde('~/x\\~y')
+        assert result == "%s/x~y" % test_env['abs_test_dir'], 'leading ~ expanded, \\~ unescaped'
+
+    def test_escaped_tilde_without_leading_tilde(self, test_env):
+        """\\~ in the middle is unescaped without any expansion."""
+        result = expand_tilde('/a/\\~b')
+        assert result == '/a/~b', 'middle \\~ unescaped'
+
+    def test_unknown_user_with_escaped_tilde(self, test_env):
+        """~nosuchuser stays literal; \\~ still unescapes afterwards."""
+        result = expand_tilde('~nosuchuser-xyzzy/a\\~b')
+        assert result == '~nosuchuser-xyzzy/a~b', 'unknown user literal, \\~ unescaped'
+
 
 class TestExpansionInRcFile:
     """Test that expansion is applied correctly in .stowrc files."""
