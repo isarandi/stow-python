@@ -29,6 +29,9 @@ These tests cover Layer 3 scenario gaps:
 
 import os
 import shutil
+import sys
+
+import pytest
 
 
 from conftest import (
@@ -283,6 +286,12 @@ class TestNonUtf8FilenamesBoth:
     through both implementations (Perl: raw bytes; Python:
     surrogateescape) producing identical trees and exit codes."""
 
+    @pytest.mark.skipif(
+        sys.platform == "darwin",
+        reason="macOS filesystems reject filenames that are not valid UTF-8, "
+        "so the scenario cannot be constructed there (Linux treats "
+        "filenames as arbitrary byte strings)",
+    )
     def test_stow_then_unstow_invalid_utf8_name(self, stow_env):
         from conftest import assert_stow_match
 
