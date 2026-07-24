@@ -178,13 +178,28 @@ def parent(*path_parts: str) -> str:
     return "" if result == "/" else result
 
 
+def current_dir() -> str:
+    """Return the working directory, or fail the way Perl stow does.
+
+    Perl's POSIX::getcwd() returns undef for a deleted working directory
+    and the run carries on until restore_cwd() chdirs to that undefined
+    value and dies, interpolating it as the empty string - hence the
+    doubled space in the message, which is reproduced byte for byte.
+    os.getcwd() raises instead, so raise the same fatal error here.
+    """
+    try:
+        return os.getcwd()
+    except OSError as e:
+        raise StowError("Your current directory  seems to have vanished") from e
+
+
 def canon_path(path: str) -> str:
     """
     Find absolute canonical path of given path.
 
     Uses chdir() to resolve symlinks and relative paths.
     """
-    cwd = os.getcwd()
+    cwd = current_dir()
     try:
         os.chdir(path)
     except OSError as e:
@@ -212,11 +227,11 @@ def restore_cwd(prev: str) -> None:
 @contextmanager
 def within_dir(path: str, name: str = "directory"):
     """Context manager to execute code within a directory, preserving cwd."""
-    cwd = os.getcwd()
+    cwd = current_dir()
     try:
         os.chdir(path)
     except OSError as e:
-        raise StowError(f"Cannot chdir to {name}: {path} ({e})") from e
+        raise StowError(f"Cannot chdir to {name}: {path} ({e.strerror})") from e
 
     debug(3, 0, f"cwd now {path}")
     try:

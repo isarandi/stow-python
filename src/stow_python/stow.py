@@ -1012,11 +1012,16 @@ class _Stower:
         try:
             listing = os.listdir(target_subdir)
         except OSError as e:
-            raise StowError(f'Cannot read directory "{target_subdir}" ({e})') from e
+            # Perl's message for this one call site already ends in a
+            # newline before error() appends its own, so the diagnostic is
+            # followed by a blank line (Stow.pm:1255); keep it byte-exact
+            raise StowError(
+                f'Cannot read directory "{target_subdir}" ({e.strerror})\n'
+            ) from e
 
         parent_in_pkg = None
 
-        for node in sorted(listing):
+        for node in sorted(listing, key=os.fsencode):
             if node in (".", ".."):
                 continue
 
@@ -1064,9 +1069,12 @@ class _Stower:
         try:
             listing = os.listdir(target_subdir)
         except OSError as e:
-            raise StowError(f'Cannot read directory "{target_subdir}" ({e})') from e
+            # Trailing newline as in _foldable above (Stow.pm:1350)
+            raise StowError(
+                f'Cannot read directory "{target_subdir}" ({e.strerror})\n'
+            ) from e
 
-        for node in sorted(listing):
+        for node in sorted(listing, key=os.fsencode):
             if node in (".", ".."):
                 continue
             node_path = join_paths(target_subdir, node)
@@ -1084,14 +1092,14 @@ class _Stower:
                     os.mkdir(task.path, 0o777)
                 except OSError as e:
                     raise StowError(
-                        f"Could not create directory: {task.path} ({e})"
+                        f"Could not create directory: {task.path} ({e.strerror})"
                     ) from e
             else:  # Action.REMOVE
                 try:
                     os.rmdir(task.path)
                 except OSError as e:
                     raise StowError(
-                        f"Could not remove directory: {task.path} ({e})"
+                        f"Could not remove directory: {task.path} ({e.strerror})"
                     ) from e
 
         elif isinstance(task, LinkTask):
@@ -1100,20 +1108,22 @@ class _Stower:
                     os.symlink(task.source, task.path)
                 except OSError as e:
                     raise StowError(
-                        f"Could not create symlink: {task.path} => {task.source} ({e})"
+                        f"Could not create symlink: {task.path} => {task.source} ({e.strerror})"
                     ) from e
             else:  # Action.REMOVE
                 try:
                     os.unlink(task.path)
                 except OSError as e:
-                    raise StowError(f"Could not remove link: {task.path} ({e})") from e
+                    raise StowError(
+                        f"Could not remove link: {task.path} ({e.strerror})"
+                    ) from e
 
         elif isinstance(task, MoveTask):
             try:
                 move(task.path, task.dest)
             except OSError as e:
                 raise StowError(
-                    f"Could not move {task.path} -> {task.dest} ({e})"
+                    f"Could not move {task.path} -> {task.dest} ({e.strerror})"
                 ) from e
 
     def _record_conflict(self, package: str, message: str) -> None:
@@ -1448,7 +1458,7 @@ class _Stower:
             try:
                 return os.readlink(link)
             except OSError as e:
-                raise StowError(f"Could not read link: {link} ({e})") from e
+                raise StowError(f"Could not read link: {link} ({e.strerror})") from e
 
         raise StowInternalError(f"read_a_link() passed a non-link path: {link}")
 
@@ -1525,7 +1535,7 @@ class _Stower:
         try:
             source = os.readlink(file_path)
         except OSError as e:
-            raise StowError(f"could not readlink {file_path} ({e})") from e
+            raise StowError(f"could not readlink {file_path} ({e.strerror})") from e
 
         task = LinkTask(
             action=Action.REMOVE,
