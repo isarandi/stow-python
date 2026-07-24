@@ -25,6 +25,9 @@ Based on Perl t/stow.t
 """
 
 import os
+import sys
+
+import pytest
 
 from conftest import (
     check_dir,
@@ -297,6 +300,12 @@ class TestStowBoth:
             compare_fs_ops=True,
         )
 
+    @pytest.mark.skipif(
+        sys.platform == "darwin",
+        reason="macOS filesystems reject filenames that are not valid UTF-8, "
+        "so the scenario cannot be constructed there (Linux treats "
+        "filenames as arbitrary byte strings)",
+    )
     def test_non_utf8_names_visited_in_byte_order(self, stow_env):
         """Perl sorts a package directory's entries by raw bytes, so a name
         that is not valid UTF-8 is visited (and its LINK line printed) at

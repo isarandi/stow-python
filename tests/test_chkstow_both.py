@@ -34,6 +34,7 @@ Note: chkstow is read-only with no simulate mode, so we don't use run_both_tests
 import os
 import pytest
 import re
+import sys
 
 from conftest import assert_chkstow_match
 
@@ -351,6 +352,12 @@ class TestChkstowGetoptLongBoth:
         rc, _, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "sub//"])
         assert stderr == "skipping sub/\n"
 
+    @pytest.mark.skipif(
+        sys.platform == "darwin",
+        reason="macOS filesystems reject filenames that are not valid UTF-8, "
+        "so the scenario cannot be constructed there (Linux treats "
+        "filenames as arbitrary byte strings)",
+    )
     def test_non_utf8_names_are_reported_byte_for_byte(self, stow_env):
         """A name that is not valid UTF-8 must be written out as the bytes
         it is, in Perl's byte sort order, instead of truncating the report
