@@ -296,3 +296,20 @@ class TestStowBoth:
             check_on_simulate=True,
             compare_fs_ops=True,
         )
+
+    def test_non_utf8_names_visited_in_byte_order(self, stow_env):
+        """Perl sorts a package directory's entries by raw bytes, so a name
+        that is not valid UTF-8 is visited (and its LINK line printed) at
+        the same point in the listing on both sides."""
+        from conftest import assert_stow_match
+
+        pkg = os.path.join(os.fsencode(stow_env.stow_dir), b"pkg")
+        os.makedirs(pkg)
+        for name in (b"\x80a", b"\xc3\xa9b", b"zzz"):
+            with open(os.path.join(pkg, name), "wb") as f:
+                f.write(b"x")
+
+        _, _, stderr, _ = assert_stow_match(
+            stow_env, ["-v", "-t", stow_env.target_dir, "pkg"]
+        )
+        assert stderr.count("LINK:") == 3, repr(stderr)

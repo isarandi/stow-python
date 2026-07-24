@@ -702,3 +702,127 @@ class TestCliOptionsBoth:
         assert prc == 1 and yrc == 1
         assert "Unknown option: o" in perr
         assert "Unknown option: o" in yerr
+
+    def test_whole_line_is_scanned_before_acting(self, stow_env):
+        """Getopt::Long parses the entire argument vector before stow acts
+        on it: `GetOptions(...) or usage('')` first, then --help, then
+        --version. A bad option therefore beats an earlier --help, and
+        --help beats --version wherever they appear."""
+        from conftest import assert_stow_match
+
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        for args in (
+            ["--help", "--bogus"],
+            ["--version", "--bogus"],
+            ["-h", "-x"],
+            ["-V", "-x"],
+            ["--version", "--help"],
+            ["--help", "--version"],
+        ):
+            assert_stow_match(stow_env, ["-t", stow_env.target_dir] + args)
+
+    def test_every_bad_option_is_reported(self, stow_env):
+        """Getopt::Long warns, counts the error and keeps parsing, so all
+        the bad options on a line are reported - not just the first."""
+        from conftest import assert_stow_match
+
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        _, _, stderr, _ = assert_stow_match(
+            stow_env, ["-t", stow_env.target_dir, "-x", "-y", "-n", "pkg"]
+        )
+        assert stderr.count("Unknown option:") == 2, repr(stderr)
+
+        _, _, stderr, _ = assert_stow_match(
+            stow_env, ["-t", stow_env.target_dir, "--de", "--ver"]
+        )
+        assert stderr.count("is ambiguous") == 2, repr(stderr)
+
+        _, _, stderr, _ = assert_stow_match(
+            stow_env, ["-t", stow_env.target_dir, "--bogus", "--adopt=1", "pkg"]
+        )
+        assert "Unknown option: bogus" in stderr
+        assert "Option adopt does not take an argument" in stderr
+
+    def test_verbose_value_grammar(self, stow_env):
+        """The accepted values for an attached -v/--verbose are
+        Getopt::Long's PAT_INT ([-+]?_*[0-9][0-9_]*): a sign and
+        underscores are legal, a leading space is not."""
+        from conftest import assert_stow_match
+
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        for value in ("-v+3", "-v-2", "-v3"):
+            assert_stow_match(stow_env, ["-n", "-t", stow_env.target_dir, value, "pkg"])
+
+        # An ATTACHED value has its underscores stripped, so --verbose=0_3
+        # is level 3 (numifying it would give 0). Levels are kept below 5,
+        # where the ignore-list regexp lines stop being comparable (#23).
+        for value in ("--verbose=+3", "--verbose=-2", "--verbose=_4", "--verbose=0_3"):
+            assert_stow_match(stow_env, ["-n", "-t", stow_env.target_dir, value, "pkg"])
+
+        # A BUNDLED value is numified instead of having its underscores
+        # stripped, so -v_4 is level 0 and -v3_0 is level 3. Perl adds an
+        # "Argument ... isn't numeric" runtime warning there, which is
+        # noise we do not reproduce (docs/perl-differences.md #4), so the
+        # resulting trace is compared with that one line removed.
+        for value in ("-v_4", "-v3_0"):
+            args = ["-n", "-t", stow_env.target_dir, value, "pkg"]
+            stow_env.reset_target()
+            prc, _, perr = stow_env.run_perl_stow(args)
+            stow_env.reset_target()
+            yrc, _, yerr = stow_env.run_python_stow(args)
+            assert prc == 0 and yrc == 0
+            perl_rest = [ln for ln in perr.splitlines() if "isn't numeric" not in ln]
+            assert perl_rest == yerr.splitlines(), (
+                "%s must reach the same verbosity level:\nPerl: %r\nPython: %r"
+                % (value, perr, yerr)
+            )
+
+        # Rejected on both sides, with nothing stowed: int() would accept
+        # " 5" and modify the filesystem where Perl refuses to
+        for value in ("--verbose= 5", "--verbose=3x"):
+            rc, _, stderr, _ = assert_stow_match(
+                stow_env, ["-t", stow_env.target_dir, value, "pkg"]
+            )
+            assert rc == 1
+            assert "invalid for option verbose" in stderr
+            check_not_exists(stow_env, "bin")
+
+    def test_program_name_comes_from_argv0(self, stow_env):
+        """Perl derives its program name from $0, so a renamed copy
+        identifies itself under that name in the usage banner and in
+        --version. The 'stow: ERROR:' prefix stays hardcoded on both."""
+        import shutil
+        import subprocess
+        import sys
+
+        import pytest
+
+        from conftest import PERL_LIB, PERL_STOW, PYTHON_STOW
+
+        if PERL_STOW is None:
+            pytest.skip("Perl stow not found")
+
+        perl_copy = os.path.join(stow_env.tmpdir, "mystow.pl")
+        python_copy = os.path.join(stow_env.tmpdir, "mystow.py")
+        shutil.copy(PERL_STOW, perl_copy)
+        shutil.copy(PYTHON_STOW, python_copy)
+
+        env = os.environ.copy()
+        env["STOW_DIR"] = stow_env.stow_dir
+        if PERL_LIB:
+            env["PERL5LIB"] = PERL_LIB
+        for cmd in (["perl", perl_copy], [sys.executable, python_copy]):
+            version = subprocess.run(
+                cmd + ["--version"], capture_output=True, text=True, env=env
+            )
+            assert version.stdout.startswith("mystow."), version.stdout
+            missing = subprocess.run(
+                cmd + ["-d", stow_env.stow_dir, "-t", stow_env.target_dir],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            assert missing.stderr.startswith("mystow."), missing.stderr

@@ -66,6 +66,13 @@ def try_create_packages(env, packages):
 
 # Strategy for package names
 # Exclude: empty, null, slash, and names starting with - or + (confused with CLI options)
+# Also exclude ".stowrc": the runs use the stow dir as their working
+# directory, so a package of that name makes ./.stowrc a DIRECTORY, which
+# is documented divergence #20 (Perl's open() of a directory succeeds and
+# fails at close with exit 21; ours fails up front with exit 1). That
+# divergence is pinned by test_stowrc_is_a_directory in
+# tests/test_divergence_pinning_both.py, so generating it here would only
+# rediscover it at random.
 # See docs/perl-differences.md for details on option parsing differences
 name_st = st.text(
     min_size=1,
@@ -75,6 +82,7 @@ name_st = st.text(
     and "/" not in x
     and not x.startswith("-")
     and not x.startswith("+")
+    and x != ".stowrc"
 )
 
 # Strategy for file content

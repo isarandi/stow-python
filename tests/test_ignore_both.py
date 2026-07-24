@@ -460,3 +460,131 @@ class TestNegationIgnorePatterns:
             check_on_simulate=False,
             compare_fs_ops=True,
         )
+
+    def test_ignore_file_with_non_utf8_bytes(self, stow_env):
+        """An ignore file holding a byte that is not valid UTF-8 must be
+        read the way Perl reads it - as bytes - instead of aborting the
+        run with a decoding error."""
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        ignore_file = os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore")
+        with open(ignore_file, "wb") as f:
+            f.write(b"--ignore=\xff\n")
+
+        def setup():
+            stow_env.create_target_dir("bin")
+
+        def check(env):
+            check_link(env, "bin/file", "../../stow/pkg/bin/file")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg"],
+            setup,
+            check_func=check,
+        )
+
+    def test_ignore_file_is_a_directory(self, stow_env):
+        """Perl's open() of a directory succeeds and reads nothing, so only
+        the hardcoded self-ignore pattern applies: the directory named
+        .stow-local-ignore is skipped and the built-in list stays bypassed."""
+        stow_env.create_package("pkg", {"a/f": "content"})
+        os.makedirs(os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore"))
+
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "a", "../stow/pkg/a")
+            check_not_exists(env, ".stow-local-ignore")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg"],
+            setup,
+            check_func=check,
+        )
+
+    def test_ignore_file_bare_cr_is_one_pattern(self, stow_env):
+        """Perl reads \\n-delimited records, so 'bar\\rbaz' is a single
+        pattern matching nothing - universal-newline reading would split
+        it and silently ignore two files the user expects to be stowed."""
+        stow_env.create_package("pkg", {"bar": "a", "baz": "b"})
+        ignore_file = os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore")
+        with open(ignore_file, "wb") as f:
+            f.write(b"bar\rbaz\n")
+
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "bar", "../stow/pkg/bar")
+            check_link(env, "baz", "../stow/pkg/baz")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg"],
+            setup,
+            check_func=check,
+        )
+
+    def test_ignore_file_non_ascii_whitespace_is_not_stripped(self, stow_env):
+        """Perl's s/^\\s+// runs on undecoded bytes, so a leading U+00A0
+        stays part of the pattern and the pattern matches nothing."""
+        stow_env.create_package("pkg", {"bar": "a", "has-dash": "b"})
+        ignore_file = os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore")
+        with open(ignore_file, "wb") as f:
+            f.write(" bar\n".encode())
+
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "bar", "../stow/pkg/bar")
+            check_link(env, "has-dash", "../stow/pkg/has-dash")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg"],
+            setup,
+            check_func=check,
+        )
+
+    def test_ignore_file_leading_inline_flag_group(self, stow_env):
+        """'(?i)man' is legal in both dialects; the anchoring wrapper pushes
+        it off position 0, so the flag group is hoisted rather than
+        rejected, and MAN is ignored case-insensitively as in Perl."""
+        stow_env.create_package("pkg", {"MAN": "a", "keep": "b"})
+        ignore_file = os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore")
+        with open(ignore_file, "w") as f:
+            f.write("(?i)man\n")
+
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "keep", "../stow/pkg/keep")
+            check_not_exists(env, "MAN")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg"],
+            setup,
+            check_func=check,
+        )
+
+    def test_memoized_ignore_file_trace(self, stow_env):
+        """The -v4 trace of a package with an ignore file must match line
+        for line, including Perl's 'Using memoized regexps from <file>' on
+        every cache hit after the first."""
+        from conftest import assert_stow_match
+
+        stow_env.create_package("pkg", {"bin/a": "a", "lib/b": "b"})
+        with open(
+            os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore"), "w"
+        ) as f:
+            f.write("foo\n")
+
+        _, _, stderr, _ = assert_stow_match(
+            stow_env, ["-v4", "-n", "-t", stow_env.target_dir, "pkg"]
+        )
+        assert stderr.count("Using memoized regexps from") >= 1, stderr

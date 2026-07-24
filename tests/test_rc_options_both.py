@@ -249,3 +249,63 @@ class TestRcOptionsBoth:
 
         assert_stow_match(stow_env, ["pkg"], setup)
         assert os.path.islink(os.path.join(expanded_target, "file"))
+
+    def test_stowrc_with_non_utf8_bytes(self, stow_env):
+        """A .stowrc holding a byte that is not valid UTF-8 must be read
+        as bytes like Perl reads it, not abort the run."""
+        from conftest import assert_stow_match
+
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        with open(os.path.join(stow_env.tmpdir, ".stowrc"), "wb") as f:
+            f.write(f"-d {stow_env.stow_dir}\n".encode())
+            f.write(f"--target={stow_env.target_dir}\n".encode())
+            f.write(b"--ignore=\xff\n")
+
+        assert_stow_match(stow_env, ["pkg"])
+        assert os.path.islink(os.path.join(stow_env.target_dir, "bin"))
+
+    def test_stowrc_bare_cr_survives_inside_a_quoted_value(self, stow_env):
+        """Perl reads \\n-delimited records and chomps one newline, so a CR
+        inside a quoted value stays in the value; universal-newline reading
+        would split the line into two unbalanced halves and silently drop
+        the option."""
+        from conftest import assert_stow_match
+
+        stow_env.create_package("pkg", {"f.txt": "hello"})
+        with open(os.path.join(stow_env.tmpdir, ".stowrc"), "wb") as f:
+            f.write(f"-d {stow_env.stow_dir}\n".encode())
+            f.write(b'--target="a\rb"\n')
+
+        _, _, stderr, _ = assert_stow_match(stow_env, ["-n", "pkg"])
+        assert "'a\rb' is not a valid directory" in stderr, repr(stderr)
+
+    def test_stowrc_variable_followed_by_non_ascii_letter(self, stow_env):
+        """Perl matches $(\\w+) over undecoded bytes, so a non-ASCII letter
+        right after $BASE ends the variable name; a Unicode \\w would
+        swallow it and abort with 'references undefined environment
+        variable'."""
+        from conftest import assert_stow_match
+
+        stow_env.create_package("pkg", {"f": "content"})
+        base = os.path.join(stow_env.tmpdir, "tg")
+        os.makedirs(base + "é")
+
+        with open(os.path.join(stow_env.tmpdir, ".stowrc"), "w") as f:
+            f.write(f"-d {stow_env.stow_dir}\n")
+            f.write("--target=$BASEé\n")
+
+        assert_stow_match(stow_env, ["pkg"], env={"BASE": base})
+        assert os.path.islink(os.path.join(base + "é", "f"))
+
+    def test_empty_home_still_probes_root_stowrc(self, stow_env):
+        """Perl tests defined($ENV{HOME}), so HOME="" makes it probe
+        "/.stowrc" rather than skipping the home candidate entirely."""
+        from conftest import assert_stow_match
+
+        stow_env.create_package("pkg", {"file": "content"})
+        with open(os.path.join(stow_env.stow_dir, ".stowrc"), "w") as f:
+            f.write(f"-d {stow_env.stow_dir}\n")
+            f.write(f"--target={stow_env.target_dir}\n")
+
+        assert_stow_match(stow_env, ["pkg"], env={"HOME": ""})
+        assert os.path.islink(os.path.join(stow_env.target_dir, "file"))

@@ -291,3 +291,87 @@ class TestChkstowGetoptLongBoth:
         assert stdout == "Unstowed file: ./plainfile\n"
         rc, stdout, _ = assert_chkstow_match(stow_env, ["-t", "./plainfile", "-a"])
         assert stdout == "Unstowed file: ./plainfile\n"
+
+    def test_empty_attached_target_value_rejected(self, stow_env):
+        """'t|target=s' makes Getopt::Long treat an attached but empty
+        value as no value at all, so nothing is scanned."""
+        self._make_bogus_link(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "--target="])
+        assert rc == 0
+        assert "Option target requires an argument" in stderr
+        assert "USAGE:" in stdout
+        assert "Bogus link:" not in stdout
+
+    def test_bare_plus_is_an_option_without_a_name(self, stow_env):
+        """getopt_compat accepts '+' as an option prefix, so a lone '+' is
+        an option whose name is missing and the scan never runs."""
+        self._make_bogus_link(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["+", "-b", "-t", "."])
+        assert rc == 0
+        assert "Missing option after +" in stderr
+        assert "Bogus link:" not in stdout
+
+    def test_diagnostics_name_the_canonical_option(self, stow_env):
+        """Getopt::Long lower-cases and prefix-expands the option before
+        warning about it, so '--FOO' is 'foo' and '--badl=1' is
+        'badlinks'."""
+        self._make_bogus_link(stow_env)
+        for args, expected in (
+            (["--FOO"], "Unknown option: foo"),
+            (["--badl=1"], "Option badlinks does not take an argument"),
+            (["--targ"], "Option target requires an argument"),
+            (["-b=1"], "Option b does not take an argument"),
+        ):
+            rc, stdout, stderr = assert_chkstow_match(stow_env, args)
+            assert rc == 0
+            assert expected in stderr, f"{args}: {stderr!r}"
+
+    def test_posixly_correct_does_not_split_single_dash_options(self, stow_env):
+        """Without getopt_compat, Getopt::Long splits an attached value off
+        after '--' only, so '-t=DIR' is one unknown option and no scan
+        happens."""
+        self._make_bogus_link(stow_env)
+        env = {"POSIXLY_CORRECT": "1"}
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-t=.", "-b"], env=env)
+        assert rc == 0
+        assert "Unknown option: t=." in stderr
+        assert "Bogus link:" not in stdout
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b=1"], env=env)
+        assert "Unknown option: b=1" in stderr
+
+    def test_trailing_slash_stripped_from_top_level_target(self, stow_env):
+        """File::Find removes one trailing slash from the top item, so
+        '-t sub/' reports 'skipping sub' and '-t sub//' reports
+        'skipping sub/'."""
+        stow_env.create_target_dir("sub/inner")
+        with open(os.path.join(stow_env.target_dir, "sub", ".stow"), "w"):
+            pass
+        rc, _, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "sub/"])
+        assert rc == 0 and stderr == "skipping sub\n"
+        rc, _, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "sub//"])
+        assert stderr == "skipping sub/\n"
+
+    def test_non_utf8_names_are_reported_byte_for_byte(self, stow_env):
+        """A name that is not valid UTF-8 must be written out as the bytes
+        it is, in Perl's byte sort order, instead of truncating the report
+        with an encoding error."""
+        target = os.fsencode(stow_env.target_dir)
+        os.symlink(b"nowhere", os.path.join(target, b"aaa_broken"))
+        os.symlink(b"nowhere", os.path.join(target, b"bad\xff\xfename"))
+        os.symlink(b"nowhere", os.path.join(target, b"zzz_broken"))
+
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["-b", "-t", "."])
+        assert rc == 0
+        assert stdout.count("Bogus link:") == 3, repr(stdout)
+
+    def test_package_list_is_sorted_in_byte_order(self, stow_env):
+        """Perl's sort compares raw bytes, so an invalid byte sorts before
+        a valid multi-byte character."""
+        target = os.fsencode(stow_env.target_dir)
+        os.symlink(b"../../stow/pkg1/file", os.path.join(target, b"a1"))
+        os.symlink(b"\x80z", os.path.join(target, b"b1"))
+        os.symlink("éw".encode(), os.path.join(target, b"b2"))
+
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["-l", "-t", "."])
+        assert rc == 0
+        assert len(stdout.splitlines()) == 3, repr(stdout)

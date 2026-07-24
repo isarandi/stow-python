@@ -117,3 +117,49 @@ class TestCrossDeviceMove:
 
         assert dst.read_text() == "adopted content"
         assert not src.exists()
+
+
+class TestVanishedWorkingDirectory:
+    def test_deleted_cwd_fails_cleanly(self, stow_env, tmp_path):
+        """A working directory that has been removed must produce Perl's
+        message, not a traceback.
+
+        POSIX::getcwd() returns undef there and Perl only dies later, in
+        restore_cwd(), interpolating the undefined path - hence the doubled
+        space, which is reproduced byte for byte. The exit code differs by
+        the usual rule (docs/perl-differences.md #13).
+
+        The child has to INHERIT the deleted directory (Popen cannot chdir
+        into one), so this runs the executables directly instead of going
+        through the stow_env helpers.
+        """
+        import subprocess
+
+        from conftest import PERL_LIB, PERL_STOW, PYTHON_STOW
+
+        if PERL_STOW is None:
+            pytest.skip("Perl stow not found")
+
+        stow_env.create_package("pkg", {"bin/prog": "content"})
+        message = "stow: ERROR: Your current directory  seems to have vanished"
+        args = ["-d", stow_env.stow_dir, "-t", stow_env.target_dir, "pkg"]
+
+        env = os.environ.copy()
+        env["STOW_DIR"] = stow_env.stow_dir
+        if PERL_LIB:
+            env["PERL5LIB"] = PERL_LIB
+
+        for cmd in (["perl", PERL_STOW], [sys.executable, PYTHON_STOW]):
+            scratch = tmp_path / "vanished"
+            scratch.mkdir()
+            os.chdir(scratch)
+            os.rmdir(scratch)
+            try:
+                proc = subprocess.run(
+                    cmd + args, capture_output=True, text=True, env=env
+                )
+            finally:
+                os.chdir(stow_env.tmpdir)
+            assert proc.returncode != 0
+            assert "Traceback" not in proc.stderr
+            assert message in proc.stderr, f"{cmd[0]}: {proc.stderr!r}"
