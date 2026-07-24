@@ -1,6 +1,6 @@
 # Perl Compatibility Notes
 
-This is the `pythonic-bug4bug` branch, which achieves syscall-level exact matching with GNU Stow 2.4.1 (Perl).
+This is the `bug4bug` branch, which achieves syscall-level exact matching with GNU Stow 2.4.1 (Perl).
 
 **No behavioral differences.** All known Perl behaviors are replicated, including edge cases and arguable bugs.
 

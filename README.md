@@ -8,7 +8,7 @@ The goal here is identical behavior to GNU Stow, to achieve true, worry-free dro
 
 ## Bug-for-Bug Branch
 
-**This is the `pythonic-bug4bug` branch** - a paranoid, frivolous exercise in exact behavioral matching. Beyond just producing the same results, this branch ensures the Python implementation matches the Perl original at the syscall level:
+**This is the `bug4bug` branch** - a paranoid, frivolous exercise in exact behavioral matching. Beyond just producing the same results, this branch ensures the Python implementation matches the Perl original at the syscall level:
 
 - **Strace-verified syscall matching**: Every filesystem operation (open, stat, lstat, readlink, symlink, unlink, chdir) occurs in the exact same order as Perl
 - **Byte-level CLI parsing**: Replicates Perl's Getopt::Long quirks, including how it handles ambiguous options and bundled flags
@@ -18,7 +18,7 @@ The goal here is identical behavior to GNU Stow, to achieve true, worry-free dro
 
 The test suite runs both implementations under strace and compares the syscall traces. This is overkill for practical use but proves the reimplementation is not just "similar" but truly equivalent.
 
-For a more sensible version that produces identical *results* without the syscall-level paranoia, see the `pythonic` branch.
+For a more sensible version that produces identical *results* without the syscall-level paranoia, see the `main` branch. Besides serving as the executable answer key for what the Perl implementation does, this branch is also a review bridge: the `main` branch differs from it only by a same-language diff whose behavioral deltas are documented in its `docs/perl-differences.md`.
 
 ## Install
 
