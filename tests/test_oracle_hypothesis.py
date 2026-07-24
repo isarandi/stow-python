@@ -23,6 +23,7 @@ Python and Perl implementations produce identical results.
 """
 
 import os
+import sys
 import tempfile
 
 from hypothesis import given, settings, assume, strategies as st, HealthCheck
@@ -36,7 +37,17 @@ from conftest import (
 
 # Oracle tests spawn subprocesses (Perl + Python), so disable per-example deadline
 # to avoid flaky failures on slower systems
-ORACLE_SETTINGS = dict(deadline=None, suppress_health_check=[HealthCheck.too_slow])
+_SUPPRESSED_HEALTH_CHECKS = [HealthCheck.too_slow]
+
+# macOS refuses filenames that Linux accepts: its filesystems reject
+# unassigned and ill-formed Unicode, so a share of the generated examples
+# cannot exist there and is assumed away by try_create_packages() in the
+# test bodies. Only that platform needs the filter health check relaxed;
+# on Linux it stays armed, so genuine over-filtering still fails the suite.
+if sys.platform == "darwin":
+    _SUPPRESSED_HEALTH_CHECKS.append(HealthCheck.filter_too_much)
+
+ORACLE_SETTINGS = dict(deadline=None, suppress_health_check=_SUPPRESSED_HEALTH_CHECKS)
 
 
 def try_create_packages(env, packages):
@@ -340,7 +351,7 @@ class TestStowHypothesis:
         """Stow with --no-folding creates individual links."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = StowTestEnv(tmpdir)
-            env.create_package("pkg", files)
+            assume(try_create_packages(env, {"pkg": files}))
 
             assert_stow_match(env, ["-t", env.target_dir, "--no-folding", "pkg"])
 
@@ -353,8 +364,7 @@ class TestStowHypothesis:
         """Stowing second package triggers tree unfolding."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = StowTestEnv(tmpdir)
-            env.create_package("pkg1", pkg1_files)
-            env.create_package("pkg2", pkg2_files)
+            assume(try_create_packages(env, {"pkg1": pkg1_files, "pkg2": pkg2_files}))
 
             def setup():
                 # Stow first package
@@ -373,7 +383,7 @@ class TestStowDotfilesHypothesis:
         """Stow with --dotfiles converts dot-X to .X."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = StowTestEnv(tmpdir)
-            env.create_package("dotpkg", files)
+            assume(try_create_packages(env, {"dotpkg": files}))
 
             assert_stow_match(env, ["-t", env.target_dir, "--dotfiles", "dotpkg"])
 
@@ -383,7 +393,7 @@ class TestStowDotfilesHypothesis:
         """Unstow with --dotfiles."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = StowTestEnv(tmpdir)
-            env.create_package("dotpkg", files)
+            assume(try_create_packages(env, {"dotpkg": files}))
 
             def setup():
                 # First stow
@@ -407,7 +417,7 @@ class TestStowConflictsHypothesis:
         """Conflict when target file already exists."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = StowTestEnv(tmpdir)
-            env.create_package("pkg", pkg_files)
+            assume(try_create_packages(env, {"pkg": pkg_files}))
 
             # Create a conflicting file at one of the package paths
             paths = list(pkg_files.keys())
@@ -426,6 +436,9 @@ class TestStowConflictsHypothesis:
         """Adopt existing files into the package with strace comparison."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = StowTestEnv(tmpdir)
+            # Confirm up front that the generated names are representable on
+            # this filesystem; setup() recreates the package for each run
+            assume(try_create_packages(env, {"pkg": pkg_files}))
 
             # Create a conflicting file at one of the package paths
             paths = list(pkg_files.keys())

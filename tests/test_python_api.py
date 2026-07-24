@@ -473,10 +473,24 @@ class TestLibraryRobustness:
         """A tree hundreds of levels deep must not hit the interpreter
         recursion limit (the planner runs on an explicit job stack)."""
         monkeypatch.setenv("HOME", str(tmp_path))
-        depth = 600
         stow_dir = tmp_path / "stow"
         target_dir = tmp_path / "target"
         target_dir.mkdir()
+
+        # Bound the depth by the platform's PATH_MAX (Linux ~4096, macOS
+        # 1024). The longest string built here is the symlink destination,
+        # which spends about five bytes per level: "../" climbing back out
+        # plus "d/" descending into the package. Linux keeps the full 600;
+        # the floor assertion below stops the test from silently decaying
+        # into a shallow one if the budget ever collapses.
+        try:
+            path_max = os.pathconf(str(tmp_path), "PC_PATH_MAX")
+        except (AttributeError, OSError, ValueError):
+            path_max = 1024
+        prefix = max(len(str(stow_dir / "pkg")), len(str(target_dir)))
+        depth = min(600, (path_max - prefix - 32) // 5)
+        assert depth > 100, f"depth {depth} too shallow to exercise the job stack"
+
         rel = "/".join(["d"] * depth)
         deep_dir = os.path.join(str(stow_dir / "pkg"), rel)
         os.makedirs(deep_dir)
