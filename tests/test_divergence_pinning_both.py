@@ -181,28 +181,30 @@ class TestDocumentedDivergences:
         check_not_exists(stow_env, "file")
 
     def test_verbose_value_gobbling(self, stow_env):
-        """perl-differences.md #10: '-v 3 pkg'.
+        """perl-differences.md #10: '-v 3 pkg' and '--verbose 3 pkg'.
 
         Perl's 'verbose|v:+' spec gobbles the following integer as the
-        verbosity level and stows pkg; Python treats 3 as a package name
-        and fails because no such package exists.
+        verbosity level, in the short and the long form alike, and stows
+        pkg; Python treats 3 as a package name and fails because no such
+        package exists.
         """
         stow_env.create_package("pkg", {"file": "content"})
 
-        stow_env.reset_target()
-        prc, _, perr = stow_env.run_perl_stow(
-            ["-t", stow_env.target_dir, "-v", "3", "pkg"]
-        )
-        assert prc == 0, f"Perl should gobble 3 as verbosity: {perr}"
-        assert os.path.islink(os.path.join(stow_env.target_dir, "file"))
+        for verbose_form in ("-v", "--verbose"):
+            stow_env.reset_target()
+            prc, _, perr = stow_env.run_perl_stow(
+                ["-t", stow_env.target_dir, verbose_form, "3", "pkg"]
+            )
+            assert prc == 0, f"Perl should gobble 3 after {verbose_form}: {perr}"
+            assert os.path.islink(os.path.join(stow_env.target_dir, "file"))
 
-        stow_env.reset_target()
-        yrc, _, yerr = stow_env.run_python_stow(
-            ["-t", stow_env.target_dir, "-v", "3", "pkg"]
-        )
-        assert yrc != 0, "Python treats 3 as a (missing) package"
-        assert "3" in yerr
-        check_not_exists(stow_env, "file")
+            stow_env.reset_target()
+            yrc, _, yerr = stow_env.run_python_stow(
+                ["-t", stow_env.target_dir, verbose_form, "3", "pkg"]
+            )
+            assert yrc != 0, "Python treats 3 as a (missing) package"
+            assert "3" in yerr
+            check_not_exists(stow_env, "file")
 
     def test_ignore_perl_regex_QE_clause(self, stow_env):
         r"""perl-differences.md #12: --ignore='\Qfoo.\E'.

@@ -412,20 +412,39 @@ class TestCliOptionsBoth:
         )
 
     def test_malformed_regex_fails_cleanly(self, stow_env):
-        """A malformed --ignore regex must give a clean error, no traceback."""
+        """perl-differences.md #12: malformed --ignore regex, both sides.
+
+        Python gives a clean 'Failed to compile regexp' error (exit 1, no
+        traceback); Perl dies with the raw interpreter message
+        ('Unmatched ( in regex; ...', exit 1). Neither stows anything.
+        """
         stow_env.create_package("pkg", {"file": "content"})
 
         stow_env.reset_target()
         rc, stdout, stderr = stow_env.run_python_stow(
             ["-t", stow_env.target_dir, "--ignore", "foo(", "pkg"]
         )
-        assert rc != 0
+        assert rc == 1
         assert "Failed to compile regexp" in stderr
         assert "Traceback" not in stderr
         check_not_exists(stow_env, "file")
 
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(
+            ["-t", stow_env.target_dir, "--ignore", "foo(", "pkg"]
+        )
+        assert prc == 1
+        assert "Unmatched ( in regex" in perr
+        check_not_exists(stow_env, "file")
+
     def test_malformed_ignore_file_regex_fails_cleanly(self, stow_env):
-        """A malformed pattern in .stow-local-ignore errors without traceback."""
+        """perl-differences.md #12/#13: malformed .stow-local-ignore, both sides.
+
+        Python errors with 'Failed to compile regexp' (exit 1, no
+        traceback); Perl dies with 'Failed to compile regexp: Unmatched (
+        ...' and exit 255 ($!-derived, clean errno after die). Neither
+        stows anything.
+        """
         stow_env.create_package("pkg", {"file": "content"})
         with open(
             os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore"), "w"
@@ -436,9 +455,16 @@ class TestCliOptionsBoth:
         rc, stdout, stderr = stow_env.run_python_stow(
             ["-t", stow_env.target_dir, "pkg"]
         )
-        assert rc != 0
+        assert rc == 1
         assert "Failed to compile regexp" in stderr
         assert "Traceback" not in stderr
+        check_not_exists(stow_env, "file")
+
+        stow_env.reset_target()
+        prc, _, perr = stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg"])
+        assert prc == 255
+        assert "Failed to compile regexp" in perr
+        assert "Unmatched ( in regex" in perr
         check_not_exists(stow_env, "file")
 
     def test_long_option_abbreviation_simulate(self, stow_env):

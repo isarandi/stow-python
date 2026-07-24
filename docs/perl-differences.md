@@ -187,12 +187,18 @@ an empty attached value (`--ignore=`) or no value at all (`stow pkg --target`)
 fails with `Option X requires an argument` exactly like Getopt::Long.
 
 The one Getopt::Long behavior we deliberately do not reproduce:
-**`-v N` value gobbling**. Perl's `verbose|v:+` spec consumes a following
-integer argument (`stow -v 2 pkg` sets level 2); we treat `2` as a package
-name and fail loudly. The failure is a clear error with a nonzero exit
-code — never silent misbehavior. The bundled form `-nt DIR` / `-nd DIR`
+**`-v N` / `--verbose N` value gobbling**. Perl's `verbose|v:+` spec
+consumes a following integer argument in the short and the long form
+alike (`stow -v 2 pkg` and `stow --verbose 2 pkg` both set level 2); we
+treat `2` as a package name and fail loudly. The failure is a clear
+error with a nonzero exit code — never silent misbehavior — but this is
+the most likely real-world script breakage when switching from Perl:
+use the attached forms `-v2` / `--verbose=2`, which behave identically
+in both implementations. The bundled form `-nt DIR` / `-nd DIR`
 (a value option ending a short-option bundle taking the next argument) IS
 supported, since it matches universal Unix conventions (`tar -xf FILE`).
+Both the short and the long space-separated form are pinned by
+`test_verbose_value_gobbling` in `tests/test_divergence_pinning_both.py`.
 
 ## 11. `--` Terminator: Packages, Not Discarded
 
@@ -201,7 +207,7 @@ Perl's Getopt::Long consumes `--` and leaves the remaining arguments in `@ARGV`,
 ## 12. Invalid Option Values Abort Cleanly
 
 - `--verbose=xyz` aborts with `Value "xyz" invalid for option verbose (number expected)` before any filesystem modification (Perl does the same).
-- A malformed `--ignore`/`--defer`/`--override` regex (e.g. `foo(`) or a malformed pattern in an ignore file produces a clean `Failed to compile regexp` error. Perl-only regex syntax such as `\Q...\E` is not supported and fails the same way, whereas Perl warns `Unrecognized escape` and proceeds.
+- A malformed `--ignore`/`--defer`/`--override` regex (e.g. `foo(`) or a malformed pattern in an ignore file produces a clean `Failed to compile regexp` error with exit 1. Perl aborts too, but with different wording and codes: for a malformed CLI regex it dies with the raw interpreter message (`Unmatched ( in regex; marked by <-- HERE in m/( <-- HERE foo()\z/ at <path-to-stow> line N.`, exit 1); for a malformed ignore-file pattern it dies with `Failed to compile regexp: Unmatched ( in regex; ...` and exit 255 (`$!`-derived, see #13). Both cases are pinned with both sides asserted (`test_malformed_regex_fails_cleanly`, `test_malformed_ignore_file_regex_fails_cleanly` in `tests/test_cli_options_both.py`). Perl-only regex syntax such as `\Q...\E` is not supported and fails the same clean way, whereas Perl warns `Unrecognized escape` and proceeds.
 
 ## 13. Exit Codes on Fatal Errors
 
@@ -219,6 +225,14 @@ Pinned by `TestExitCodeAndWarningDivergences` in
 with a readable `./.stowrc`) vs Python 1; package-is-a-file → Perl 2 vs
 Python 20 with identical stderr on both planners; `.stowrc`-is-a-directory
 → Perl 21 vs Python 1 (see #20).
+
+Further cases that follow the same rule without their own pins: a
+malformed ignore-file regex → Perl 255 (`$!` clean after `die`) vs
+Python 1 (pinned in `tests/test_cli_options_both.py`, see #12); a
+`.stowrc` referencing an undefined environment variable → byte-identical
+stderr (`... references undefined environment variable $VAR; aborting!`)
+but Perl exits with a leftover errno (typically 2/ENOENT from rc-file
+probing) vs Python 1.
 
 ## 14. Refolding Ignores Perl's `foldable('')` Bug
 
