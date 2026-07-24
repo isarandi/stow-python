@@ -28,6 +28,7 @@ as an oracle. Both must produce identical:
 
 import errno
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -394,6 +395,31 @@ def normalize_stow_output(text):
     return text
 
 
+def normalize_getopt_long_wording(text):
+    """
+    Canonicalize the one Getopt::Long diagnostic whose wording changed
+    upstream.
+
+    Getopt::Long 2.54 and earlier print
+        Value "xyz" invalid for option verbose (number expected)
+    while 2.55 and later print
+        Value "xyz" invalid for option verbose (integer number expected)
+
+    The message comes from the system Perl's module, not from GNU Stow, so
+    the Perl side of the comparison depends on which Perl is installed
+    rather than on Stow's behavior. Map the newer spelling onto the older
+    one so the oracle comparison is stable across Perl installations; see
+    docs/perl-differences.md. The substitution is deliberately anchored to
+    the full message so it cannot mask a missing or differently-worded
+    diagnostic.
+    """
+    return re.sub(
+        r'(Value "[^"]*" invalid for option \S+) \(integer number expected\)',
+        r"\1 (number expected)",
+        text,
+    )
+
+
 def normalize_newline_warnings(text):
     """
     Filter out Perl/Python warnings about newlines in filenames.
@@ -451,6 +477,10 @@ def assert_stow_match(stow_env, args, setup_func=None, env=None):
     # Filter out newline warnings from both (these trigger inconsistently)
     perl_stderr = normalize_newline_warnings(perl_stderr)
     python_stderr = normalize_newline_warnings(python_stderr)
+
+    # Absorb the Getopt::Long version difference, not any Stow behavior
+    perl_stderr = normalize_getopt_long_wording(perl_stderr)
+    python_stderr = normalize_getopt_long_wording(python_stderr)
 
     # Compare return codes
     assert perl_rc == python_rc, (
@@ -1148,6 +1178,8 @@ def assert_stow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
     python_stderr = normalize_stow_output(python_stderr)
     perl_stderr = normalize_newline_warnings(perl_stderr)
     python_stderr = normalize_newline_warnings(python_stderr)
+    perl_stderr = normalize_getopt_long_wording(perl_stderr)
+    python_stderr = normalize_getopt_long_wording(python_stderr)
 
     # Compare return codes
     assert perl_rc == python_rc, (

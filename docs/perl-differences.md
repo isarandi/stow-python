@@ -330,6 +330,30 @@ into the `-v3` tildification substitution as a raw regex, so a HOME
 containing regex metacharacters misbehaves in Perl; Python escapes it.
 For any normal HOME the output is byte-identical.
 
+## 24. `--verbose=xyz` Wording Depends on the System Getopt::Long
+
+The diagnostic for a non-numeric verbosity comes from Perl's Getopt::Long
+module, not from Stow, and its wording changed upstream:
+
+| Getopt::Long | Message |
+|--------------|---------|
+| 2.54 and earlier | `Value "xyz" invalid for option verbose (number expected)` |
+| 2.55 and later | `Value "xyz" invalid for option verbose (integer number expected)` |
+
+Perl stow therefore prints different text depending only on which Perl is
+installed — Debian/Ubuntu currently ship 2.54, while a Homebrew or
+otherwise recent Perl ships 2.58. No single fixed string can match every
+installation, so we emit the 2.54 wording (the widely deployed one, and
+the one our pinned tests assert). Both spellings mean the same thing, the
+exit code is 1 either way, and neither implementation touches the
+filesystem.
+
+Because the difference tracks the local Perl rather than Stow's behavior,
+the oracle harness canonicalizes the newer spelling onto the older one
+(`normalize_getopt_long_wording` in `tests/conftest.py`), anchored to the
+complete message so it cannot hide a missing or differently-worded
+diagnostic.
+
 ---
 
 ## Syscall Normalization (Not a Behavioral Difference)
