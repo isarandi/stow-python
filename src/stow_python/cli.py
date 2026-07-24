@@ -34,6 +34,7 @@ import itertools
 import os
 import pwd
 import re
+import signal
 import sys
 import traceback
 from typing import NoReturn
@@ -122,6 +123,7 @@ def perl_shellwords(line: str) -> list[str]:
 
 def main() -> None:
     """Main entry point for stow command."""
+    configure_standard_streams()
     try:
         _main()
     except StowInternalError as e:
@@ -144,6 +146,27 @@ def main() -> None:
     except StowError as e:
         print(f"{PROGRAM_NAME}: ERROR: {e.message}", file=sys.stderr)
         sys.exit(e.errno)
+
+
+def configure_standard_streams() -> None:
+    """Make the standard streams behave the way Perl stow's do.
+
+    Perl writes undecoded bytes, so a file name that is not valid UTF-8
+    reaches the terminal byte for byte; Python's defaults would render it
+    as escape text on stderr and raise UnicodeEncodeError on stdout.
+    surrogateescape round-trips exactly the bytes the filesystem gave us.
+
+    Restoring the default SIGPIPE action likewise matches Perl: piping
+    output into a program that exits early (`stow --help | head`) then
+    ends the process on the signal instead of printing a BrokenPipeError
+    traceback. Only the entry points do this - a library caller's process
+    is none of our business.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="surrogateescape")
+    if hasattr(signal, "SIGPIPE"):
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 
 def _main() -> None:

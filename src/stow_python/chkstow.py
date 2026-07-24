@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import stat
 import sys
 from collections.abc import Iterator
@@ -69,6 +70,8 @@ _OPTION_SPECS: tuple[tuple[tuple[str, ...], Mode | None], ...] = (
 
 def main() -> None:
     """Main entry point."""
+    configure_standard_streams()
+
     if len(sys.argv) == 1:
         usage()
 
@@ -83,6 +86,22 @@ def main() -> None:
     elif mode == Mode.LIST:
         for pkg in list_packages(target):
             print(pkg)
+
+
+def configure_standard_streams() -> None:
+    """Make the standard streams behave the way Perl chkstow's do.
+
+    A report about a tree is worthless if it stops at the first name that
+    is not valid UTF-8: Perl writes undecoded bytes and lists the whole
+    tree, so surrogateescape reproduces those bytes exactly instead of
+    raising UnicodeEncodeError mid-report. Restoring the default SIGPIPE
+    action matches Perl for `chkstow -a | head`.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="surrogateescape")
+    if hasattr(signal, "SIGPIPE"):
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 
 def parse_args(args: list[str]) -> tuple[str, Mode]:
