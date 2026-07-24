@@ -304,8 +304,8 @@ def process_options() -> tuple[dict, list[str], list[str]]:
 
     # Perl strips trailing slashes from package names (s{/+$}{} on the
     # aliased loop variable), so "stow pkg/" behaves exactly like "stow pkg"
-    pkgs_to_unstow = [p.rstrip("/") for p in pkgs_to_unstow]
-    pkgs_to_stow = [p.rstrip("/") for p in pkgs_to_stow]
+    pkgs_to_unstow = [_strip_trailing_slashes(p) for p in pkgs_to_unstow]
+    pkgs_to_stow = [_strip_trailing_slashes(p) for p in pkgs_to_stow]
     check_packages(pkgs_to_stow, pkgs_to_unstow)
 
     return (options, pkgs_to_unstow, pkgs_to_stow)

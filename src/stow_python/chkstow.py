@@ -235,7 +235,9 @@ def list_packages(target: str) -> list[str]:
             dest = re.sub(r"/.*", "", dest)
             packages.add(dest)
 
-    return sorted(packages - {"", ".."})
+    # Byte order, like Perl's sort: a package name that is not valid UTF-8
+    # would otherwise be listed at a different position
+    return sorted(packages - {"", ".."}, key=os.fsencode)
 
 
 def _walk_target(target: str) -> Iterator[str]:

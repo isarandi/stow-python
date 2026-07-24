@@ -263,7 +263,10 @@ def unadjust_dotfile(target_node: str) -> str:
 
     Used during unstow with --compat and --dotfiles.
     """
-    if target_node in (".", ".."):
+    # Perl's guard is /^\.\.?$/, and its "$" (like Python's) also matches
+    # just before a final newline, so entries named ".\n" and "..\n" are
+    # left alone too - which decides whether they are unstowed
+    if re.fullmatch(r"\.\.?\n?", target_node):
         return target_node
 
     if target_node.startswith("."):

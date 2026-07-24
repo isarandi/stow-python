@@ -524,8 +524,11 @@ class _Stower:
                 f"cannot read directory: {pkg_path_from_cwd} ({e.strerror})", errno=2
             ) from e
 
-        # Pushed in reverse so that popping visits entries in sorted order
-        for node in sorted(listing, reverse=True):
+        # Pushed in reverse so that popping visits entries in sorted order.
+        # os.fsencode as the key sorts by raw bytes, which is what Perl's
+        # sort does: a name that is not valid UTF-8 would otherwise be
+        # visited at a different point in the listing.
+        for node in sorted(listing, key=os.fsencode, reverse=True):
             jobs.append(
                 StowNodeJob(stow_path, package, pkg_subdir, target_subdir, node)
             )
@@ -815,7 +818,7 @@ class _Stower:
         if not self.c.compat:
             jobs.append(CleanupJob(target_subdir))
         # Pushed in reverse so that popping visits entries in sorted order
-        for node in sorted(listing, reverse=True):
+        for node in sorted(listing, key=os.fsencode, reverse=True):
             jobs.append(UnstowNodeJob(package, pkg_subdir, target_subdir, node))
 
     def _unstow_visit_node(
@@ -940,7 +943,7 @@ class _Stower:
                 f"cannot read directory: {dir_path} ({e.strerror})", errno=2
             ) from e
 
-        for node in sorted(listing):
+        for node in sorted(listing, key=os.fsencode):
             if node in (".", ".."):
                 continue
 
