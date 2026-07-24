@@ -548,10 +548,12 @@ def get_config_file_options() -> tuple[dict, list[str], list[str]]:
                     # Parse like Perl's shellwords so .stowrc files
                     # written for GNU Stow behave identically
                     defaults.extend(perl_shellwords(line.rstrip("\n\r")))
-        except (FileNotFoundError, PermissionError):
-            continue  # Skip missing or unreadable files
-        except IsADirectoryError:
-            raise StowCLIError(f"Could not open {file_path} for reading")
+        except IsADirectoryError as e:
+            raise StowCLIError(f"Could not open {file_path} for reading") from e
+        except OSError:
+            # Missing or unreadable (EACCES, ELOOP, EIO, ...): skip the
+            # file silently, like Perl's -r probe failing
+            continue
 
     rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow = parse_cli_options(defaults)
 
@@ -580,10 +582,10 @@ def expand_environment_variables(path: str, source: str) -> str:
         var = match.group(1)
         try:
             return os.environ[var]
-        except KeyError:
+        except KeyError as e:
             raise StowCLIError(
                 f"{source} references undefined environment variable ${var}; aborting!"
-            )
+            ) from e
 
     # Braced form: Perl stow only expands ${NAME} when the braces contain
     # word/space characters ([\w\s]+), so shell-isms like ${VAR:-default}

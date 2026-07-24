@@ -41,12 +41,18 @@ class Mode(Enum):
     LIST = auto()
 
 
-# "or" (not a default argument) so an empty STOW_DIR also falls back.
-# Deliberately NOT like Perl chkstow's `$ENV{STOW_DIR} ||` fallback, which
-# also treats the string "0" as false: here STOW_DIR=0 names a real
-# directory, consistent with Perl stow's own `length` check.
-# See docs/perl-differences.md.
-DEFAULT_TARGET = os.environ.get("STOW_DIR") or "/usr/local/"
+def default_target() -> str:
+    """Default target directory: $STOW_DIR, else /usr/local/.
+
+    "or" (not a default argument) so an empty STOW_DIR also falls back.
+    Deliberately NOT like Perl chkstow's `$ENV{STOW_DIR} ||` fallback,
+    which also treats the string "0" as false: here STOW_DIR=0 names a
+    real directory, consistent with Perl stow's own `length` check.
+    See docs/perl-differences.md. A function (not a module constant) so
+    the environment is read when parsing starts, not at import time.
+    """
+    return os.environ.get("STOW_DIR") or "/usr/local/"
+
 
 # Option table mirroring Perl chkstow's GetOptions() spec
 # ('b|badlinks', 'a|aliens', 'l|list', 't|target=s') under Getopt::Long's
@@ -91,7 +97,7 @@ def parse_args(args: list[str]) -> tuple[str, Mode]:
     and stops option processing at the first non-option argument
     (require_order).
     """
-    target = DEFAULT_TARGET
+    target = default_target()
     mode = Mode.BAD_LINKS
     posixly_correct = "POSIXLY_CORRECT" in os.environ
     ok = True
@@ -173,7 +179,7 @@ USAGE: chkstow [options]
 
 Options:
     -t DIR, --target=DIR  Set the target directory to DIR
-                          (default is {DEFAULT_TARGET})
+                          (default is {default_target()})
     -b, --badlinks        Report symlinks that point to non-existent files
     -a, --aliens          Report non-symlinks in the target directory
     -l, --list            List packages in the target directory

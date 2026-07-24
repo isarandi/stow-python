@@ -197,7 +197,7 @@ def _compile_option_pattern(pattern: str, option: str) -> re.Pattern[str]:
     try:
         return re.compile(_PATTERN_TEMPLATES[option].format(pattern))
     except re.error as e:
-        raise StowError(f"Failed to compile regexp for --{option}: {e}")
+        raise StowError(f"Failed to compile regexp for --{option}: {e}") from e
 
 
 # =============================================================================
@@ -316,7 +316,10 @@ class _Stower:
         """Execute planned tasks and return result.
 
         Returns StowResult with success=False if there were conflicts,
-        or success=True with the list of executed tasks.
+        or success=True with the list of executed tasks. If a task fails
+        mid-execution, StowError propagates and earlier tasks remain
+        applied (no rollback, like Perl stow); the filesystem may then be
+        in a partially-modified state.
         """
         if self.conflicts:
             return StowResult(
@@ -510,7 +513,7 @@ class _Stower:
         # Does the target already exist?
         if self._is_a_link(target_subpath):
             self._stow_node_for_existing_link(
-                stow_path, package, pkg_subpath, target_subpath, link_dest, jobs
+                package, pkg_subpath, target_subpath, link_dest, jobs
             )
         elif self._is_a_node(target_subpath):
             self._stow_node_for_existing_node(
@@ -530,7 +533,6 @@ class _Stower:
 
     def _stow_node_for_existing_link(
         self,
-        stow_path: str,
         package: str,
         pkg_subpath: str,
         target_subpath: str,
@@ -1558,9 +1560,14 @@ def _read_ignore_file(file_path: str) -> IgnorePatterns:
 
 
 def _compile_ignore_patterns(patterns: set[str]) -> IgnorePatterns:
-    """Compile ignore patterns into path and segment regexps."""
-    segment_patterns = [p for p in patterns if "/" not in p]
-    path_patterns = [p for p in patterns if "/" in p]
+    """Compile ignore patterns into path and segment regexps.
+
+    The alternations are sorted so the compiled patterns (printed in the
+    -v5 debug output) are reproducible across runs; Perl's are randomized
+    by hash iteration order (see docs/perl-differences.md #23). Order
+    never affects which paths match."""
+    segment_patterns = sorted(p for p in patterns if "/" not in p)
+    path_patterns = sorted(p for p in patterns if "/" in p)
 
     segment_regexp = None
     path_regexp = None
@@ -1576,7 +1583,7 @@ def _compile_ignore_patterns(patterns: set[str]) -> IgnorePatterns:
     except re.error as e:
         # StowError produces a clean "stow: ERROR: ..." message instead of
         # a traceback when an ignore file contains a malformed pattern
-        raise StowError(f"Failed to compile regexp: {e}")
+        raise StowError(f"Failed to compile regexp: {e}") from e
 
     return IgnorePatterns(path_regexp, segment_regexp)
 

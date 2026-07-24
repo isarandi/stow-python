@@ -133,9 +133,16 @@ class TestChkstow:
 
         assert any("bin/link" in b for b in bad_links)
 
-    def test_default_target(self, chkstow_env):
-        """parse_args returns DEFAULT_TARGET when no -t specified."""
+    def test_default_target(self, chkstow_env, monkeypatch):
+        """parse_args returns the STOW_DIR-derived default when no -t given."""
+        monkeypatch.setenv("STOW_DIR", "/some/stow/dir")
         target, mode = chkstow.parse_args(["-b"])
 
-        assert target == chkstow.DEFAULT_TARGET
+        assert target == "/some/stow/dir"
+        assert mode == chkstow.Mode.BAD_LINKS
+
+        monkeypatch.delenv("STOW_DIR")
+        target, mode = chkstow.parse_args(["-b"])
+
+        assert target == "/usr/local/"
         assert mode == chkstow.Mode.BAD_LINKS

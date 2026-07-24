@@ -31,6 +31,8 @@ reproduced; the .postN suffix counts stow-python releases on top of it.
     fixed: a leading "~" is now expanded before "\~" sequences are
     unescaped, matching Perl stow's expand_tilde order.  Previously
     any "\~" in the path suppressed expansion of the leading "~".
+  - An unreadable .stowrc (e.g. a symlink loop) is now skipped, like
+    Perl's -r probe, instead of aborting with a traceback.
   - Debug output at verbose levels 4-5 now byte-matches the Perl
     implementation, except for documented lines.
 

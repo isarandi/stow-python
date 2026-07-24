@@ -190,8 +190,10 @@ def canon_path(path: str) -> str:
     except OSError as e:
         raise StowError(f"canon_path: cannot chdir to {path} from {cwd}") from e
 
-    canon = os.getcwd()
-    restore_cwd(cwd)
+    try:
+        canon = os.getcwd()
+    finally:
+        restore_cwd(cwd)
     return canon
 
 
