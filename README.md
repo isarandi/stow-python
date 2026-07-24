@@ -6,6 +6,8 @@ The reason for making this is that GNU Stow is very useful but it's written in P
 
 The goal here is identical behavior to GNU Stow, to achieve true, worry-free drop-in substitution. This is tested both with ports of the original Perl tests and with oracle tests against the Perl executable verifying identical output, return codes and filesystem state. The code itself is not very pythonic, following the logic of the original Perl code is of higher priority to ensure correctness.
 
+**Note:** this is the `py27-literal` branch — a frozen, Python 2.7-compatible literal transpilation of the Perl code, kept for ancient systems where only an old Python is available. The maintained product (idiomatic Python 3.10+, actively developed) lives on the [`main` branch](https://github.com/isarandi/stow-python/tree/main), and a bug-for-bug reference that replicates the Perl implementation exactly lives on `bug4bug`.
+
 ## Install
 
 Stow-Python has a single self-contained executable Python script `stow`, which you can simply drop directly into any directory in your PATH, such as `~/.local/bin`:
