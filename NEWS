@@ -27,6 +27,10 @@ reproduced; the .postN suffix counts stow-python releases on top of it.
   - ${VAR} expansion in .stowrc files now matches Perl's rule that
     brace-delimited names consist of word and whitespace characters
     ([\w\s]).
+  - Tilde expansion of .stowrc paths containing escaped tildes is
+    fixed: a leading "~" is now expanded before "\~" sequences are
+    unescaped, matching Perl stow's expand_tilde order.  Previously
+    any "\~" in the path suppressed expansion of the leading "~".
   - Debug output at verbose levels 4-5 now byte-matches the Perl
     implementation, except for documented lines.
 

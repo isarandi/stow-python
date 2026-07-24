@@ -223,3 +223,29 @@ class TestRcOptionsBoth:
 
         assert_stow_match(stow_env, ["pkg"], setup)
         assert os.path.islink(os.path.join(literal_target, "file"))
+
+    def test_tilde_expansion_with_escaped_tilde(self, stow_env):
+        """A leading ~ expands even when the path also holds an escaped
+        tilde: expansion runs first, then \\~ unescapes, so a rc-file
+        --target='~/tgt\\~x' resolves to $HOME/tgt~x on both sides. The
+        value is single-quoted so shellwords keeps the backslash for the
+        tilde-expansion step to see (unquoted, shellwords itself would
+        already unescape \\~ to ~)."""
+        import shutil
+
+        from conftest import assert_stow_match
+
+        stow_env.create_package("pkg", {"file": "content"})
+        # HOME is stow_env.tmpdir in the oracle harness
+        expanded_target = os.path.join(stow_env.tmpdir, "tgt~x")
+
+        with open(os.path.join(stow_env.tmpdir, ".stowrc"), "w") as f:
+            f.write(f"-d {stow_env.stow_dir}\n")
+            f.write("--target='~/tgt\\~x'\n")
+
+        def setup():
+            shutil.rmtree(expanded_target, ignore_errors=True)
+            os.makedirs(expanded_target)
+
+        assert_stow_match(stow_env, ["pkg"], setup)
+        assert os.path.islink(os.path.join(expanded_target, "file"))
