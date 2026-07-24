@@ -125,11 +125,19 @@ def parse_args(args: list[str]) -> tuple[str, Mode]:
         arg = args[i]
         if arg == "--":
             break
-        if arg.startswith("--"):
+        long_form = arg.startswith("--")
+        if long_form:
             name = arg[2:]
-        elif len(arg) > 1 and (
-            arg.startswith("-") or (arg.startswith("+") and not posixly_correct)
-        ):
+        elif len(arg) > 1 and arg.startswith("-"):
+            name = arg[1:]
+        elif arg.startswith("+") and not posixly_correct:
+            # getopt_compat accepts "+" as an option prefix, so a bare "+"
+            # is an option whose name is missing
+            if len(arg) == 1:
+                print("Missing option after +", file=sys.stderr)
+                ok = False
+                i += 1
+                continue
             name = arg[1:]
         else:
             if posixly_correct:
@@ -138,28 +146,39 @@ def parse_args(args: list[str]) -> tuple[str, Mode]:
             continue
 
         attached: str | None = None
-        if "=" in name and not name.startswith("="):
+        # Without getopt_compat (i.e. under POSIXLY_CORRECT) Getopt::Long
+        # splits an attached value off after "--" only, so "-t=DIR" is the
+        # unknown option "t=DIR" rather than --target=DIR
+        if (
+            (long_form or not posixly_correct)
+            and "=" in name
+            and not name.startswith("=")
+        ):
             name, attached = name.split("=", 1)
 
         spec = _find_option(name, allow_abbrev=not posixly_correct)
         if spec is None:
-            print(f"Unknown option: {name}", file=sys.stderr)
+            print(f"Unknown option: {name.lower()}", file=sys.stderr)
             ok = False
         else:
-            _, spec_mode = spec
+            canonical, spec_mode = spec
             if spec_mode is not None:
                 if attached is not None:
-                    print(f"Option {name} does not take an argument", file=sys.stderr)
+                    print(
+                        f"Option {canonical} does not take an argument", file=sys.stderr
+                    )
                     ok = False
                 else:
                     mode = spec_mode
-            elif attached is not None:
+            elif attached:
                 target = attached
-            elif i + 1 < len(args):
+            elif attached is None and i + 1 < len(args):
                 i += 1
                 target = args[i]
             else:
-                print(f"Option {name} requires an argument", file=sys.stderr)
+                # An attached but empty value ("--target=") is no value at
+                # all to Getopt::Long, exactly like a missing one
+                print(f"Option {canonical} requires an argument", file=sys.stderr)
                 ok = False
         i += 1
 
@@ -169,23 +188,26 @@ def parse_args(args: list[str]) -> tuple[str, Mode]:
     return target, mode
 
 
-def _find_option(
-    name: str, allow_abbrev: bool
-) -> tuple[tuple[str, ...], Mode | None] | None:
+def _find_option(name: str, allow_abbrev: bool) -> tuple[str, Mode | None] | None:
     """Resolve an option name like Getopt::Long's default find_option: an
     exact match on a name or alias wins, else a unique prefix resolves,
-    both case-insensitively. Returns the matching spec, or None if the
-    option is unknown. (No prefix is ambiguous between two of chkstow's
-    specs, so unlike stow's parser there is no ambiguity error path.)
+    both case-insensitively. Returns (canonical name, mode), or None if
+    the option is unknown. (No prefix is ambiguous between two of
+    chkstow's specs, so unlike stow's parser there is no ambiguity error
+    path.) The canonical name is what Getopt::Long's diagnostics quote:
+    the lower-cased spelling of an exact name or alias, and the expanded
+    name of an abbreviation ("--badl=1" complains about "badlinks").
     """
     folded = name.lower()
-    for spec in _OPTION_SPECS:
-        if folded in spec[0]:
-            return spec
+    for names, mode in _OPTION_SPECS:
+        if folded in names:
+            return folded, mode
     if not allow_abbrev or not folded:
         return None
     hits = [
-        spec for spec in _OPTION_SPECS if any(n.startswith(folded) for n in spec[0])
+        (next(n for n in names if n.startswith(folded)), mode)
+        for names, mode in _OPTION_SPECS
+        if any(n.startswith(folded) for n in names)
     ]
     return hits[0] if len(hits) == 1 else None
 
@@ -243,13 +265,19 @@ def list_packages(target: str) -> list[str]:
 def _walk_target(target: str) -> Iterator[str]:
     """Walk target directory, yielding file and symlink paths.
 
-    Follows Perl File::Find's edge behaviors: an unstattable target warns
-    "Can't stat ..." on stderr and checks nothing, and a target that is
-    not a directory is checked once itself, named "./x" when given as a
-    bare relative name. One deliberate divergence: a symlink to a
-    directory is followed and its contents checked, where Perl checks
-    only the symlink itself once — see docs/perl-differences.md.
+    Follows Perl File::Find's edge behaviors: one trailing slash is
+    stripped off the top-level argument, an unstattable target warns
+    "Can't stat ..." on stderr and checks nothing, a target that is not a
+    directory is checked once itself, named "./x" when given as a bare
+    relative name, and a directory that cannot be entered or read is
+    reported and skipped rather than silently passed over. One deliberate
+    divergence: a symlink to a directory is followed and its contents
+    checked, where Perl checks only the symlink itself once — see
+    docs/perl-differences.md.
     """
+    if target != "/":
+        target = target.removesuffix("/")
+
     try:
         st: os.stat_result | None = os.lstat(target)
     except OSError as e:
@@ -266,7 +294,15 @@ def _walk_target(target: str) -> Iterator[str]:
         yield target if "/" in target else "./" + target
         return
 
-    for dirpath, dirnames, filenames in os.walk(target):
+    # File::Find skips the chdir for a top item of "." and goes straight
+    # to the opendir, so the failure it reports there is a different one
+    if target != os.curdir:
+        error = _cannot_enter(target)
+        if error is not None:
+            print(f"Can't cd to {target}: {error.strerror}", file=sys.stderr)
+            return
+
+    for dirpath, dirnames, filenames in os.walk(target, onerror=_report_opendir_error):
         if os.path.exists(os.path.join(dirpath, ".stow")) or os.path.exists(
             os.path.join(dirpath, ".notstowed")
         ):
@@ -281,6 +317,41 @@ def _walk_target(target: str) -> Iterator[str]:
             path = os.path.join(dirpath, dirname)
             if os.path.islink(path):
                 yield path
+
+        # File::Find chdirs into every directory before listing it, so a
+        # readable but unsearchable one (mode 444) is reported and its
+        # contents are never seen; os.walk would happily enumerate it.
+        for dirname in list(dirnames):
+            path = os.path.join(dirpath, dirname)
+            if os.path.islink(path):
+                continue
+            error = _cannot_enter(path)
+            if error is not None:
+                print(
+                    f"Can't cd to ({dirpath}/) {dirname}: {error.strerror}",
+                    file=sys.stderr,
+                )
+                dirnames.remove(dirname)
+
+
+def _cannot_enter(path: str) -> OSError | None:
+    """Return the error a chdir into path would fail with, else None.
+
+    Statting "<path>/." needs exactly the search permission chdir needs,
+    so this answers File::Find's question without moving the process out
+    of the directory the walk's relative paths are resolved against.
+    """
+    try:
+        os.stat(os.path.join(path, os.curdir))
+    except OSError as e:
+        return e
+    return None
+
+
+def _report_opendir_error(error: OSError) -> None:
+    """os.walk error handler: a directory that could be entered but not
+    listed, which is where File::Find's opendir fails."""
+    print(f"Can't opendir({error.filename}): {error.strerror}", file=sys.stderr)
 
 
 if __name__ == "__main__":
