@@ -9,8 +9,6 @@ as an oracle. Both must produce identical:
 - Filesystem effects
 """
 
-from __future__ import print_function
-
 import errno
 import os
 import shutil
@@ -777,7 +775,7 @@ def parse_strace_output(strace_file, tmpdir=None, filter_relevant=True):
 
     # A missing or unreadable strace file must fail loudly, not yield an
     # empty op list that would compare equal to another empty op list
-    with open(strace_file, "r") as f:
+    with open(strace_file) as f:
         for line in f:
             # Skip lines without syscall pattern
             paren_pos = line.find("(")

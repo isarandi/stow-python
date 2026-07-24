@@ -5,8 +5,6 @@ Each test creates a scenario, runs both implementations, and verifies
 they produce identical results (return code, stdout, stderr, filesystem).
 """
 
-from __future__ import print_function
-
 import os
 
 from conftest import assert_stow_match, assert_stow_match_with_fs_ops

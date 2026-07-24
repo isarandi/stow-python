@@ -22,8 +22,6 @@ These are black-box tests that invoke the stow script as a subprocess
 and check return codes and output.
 """
 
-from __future__ import print_function
-
 import os
 import pwd
 import re

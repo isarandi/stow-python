@@ -20,27 +20,10 @@ Test unstowing packages - Python port of t/unstow.t
 """
 
 import os
-import sys
 import pytest
 import re
-
-# Python 2/3 compatible StringIO and redirect_stderr
-if sys.version_info[0] >= 3:
-    from io import StringIO
-    from contextlib import redirect_stderr
-else:
-    from StringIO import StringIO
-    import contextlib
-
-    @contextlib.contextmanager
-    def redirect_stderr(new_stderr):
-        old_stderr = sys.stderr
-        sys.stderr = new_stderr
-        try:
-            yield
-        finally:
-            sys.stderr = old_stderr
-
+from contextlib import redirect_stderr
+from io import StringIO
 
 from testutil import (
     count_conflicts,

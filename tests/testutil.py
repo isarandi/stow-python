@@ -19,8 +19,6 @@
 Utilities shared by test scripts - Python port of testutil.pm
 """
 
-from __future__ import print_function
-
 import os
 import shutil
 
@@ -199,7 +197,7 @@ def new_Stow(**opts):
     except Exception as e:
         raise RuntimeError(
             "Error while trying to instantiate new Stow(%s): %s" % (opts, e)
-        )
+        ) from e
 
     return stow
 
@@ -339,12 +337,12 @@ def cd(dir_path):
     try:
         os.chdir(dir_path)
     except OSError as e:
-        raise RuntimeError("Failed to chdir(%s): %s" % (dir_path, e))
+        raise RuntimeError("Failed to chdir(%s): %s" % (dir_path, e)) from e
 
 
 def cat_file(file_path):
     """Return file contents."""
-    with open(file_path, "r") as f:
+    with open(file_path) as f:
         return f.read()
 
 

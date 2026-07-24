@@ -37,7 +37,7 @@ import os
 import re
 import sys
 from contextlib import contextmanager
-from typing import Iterator, Optional, Sequence
+from collections.abc import Iterator, Sequence
 
 from stow_python.types import (
     Action,
@@ -88,7 +88,7 @@ GLOBAL_IGNORE_FILE = ".stow-global-ignore"
 
 def stow(
     *package_names: str,
-    config: Optional[StowConfig] = None,
+    config: StowConfig | None = None,
     **kwargs,
 ) -> StowResult:
     """Stow packages into target directory.
@@ -109,7 +109,7 @@ def stow(
 
 def unstow(
     *package_names: str,
-    config: Optional[StowConfig] = None,
+    config: StowConfig | None = None,
     **kwargs,
 ) -> StowResult:
     """Unstow packages from target directory.
@@ -130,7 +130,7 @@ def unstow(
 
 def restow(
     *package_names: str,
-    config: Optional[StowConfig] = None,
+    config: StowConfig | None = None,
     **kwargs,
 ) -> StowResult:
     """Restow packages (unstow then stow).
@@ -152,7 +152,7 @@ def restow(
     return stower.execute()
 
 
-def _make_config(config: Optional[StowConfig], **kwargs) -> StowConfig:
+def _make_config(config: StowConfig | None, **kwargs) -> StowConfig:
     """Create a StowConfig from optional base config and overrides.
 
     A typo'd option name (e.g. adpot=True) must not silently change
@@ -912,7 +912,7 @@ class _Stower:
                 )
                 self._do_unlink(node_path)
 
-    def _foldable(self, target_subdir: str) -> Optional[str]:
+    def _foldable(self, target_subdir: str) -> str | None:
         """
         Determine whether a tree can be folded.
 
@@ -1026,7 +1026,7 @@ class _Stower:
         elif isinstance(task, MoveTask):
             try:
                 move(task.path, task.dest)
-            except (IOError, OSError) as e:
+            except OSError as e:
                 raise StowError(
                     f"Could not move {task.path} -> {task.dest} ({e})"
                 ) from e
@@ -1134,14 +1134,14 @@ class _Stower:
             return True
         return False
 
-    def _get_owning_package(self, target_subpath: str, link_dest: str) -> Optional[str]:
+    def _get_owning_package(self, target_subpath: str, link_dest: str) -> str | None:
         """Determine whether the given link points to a member of a stowed package."""
         stowed = self._find_stowed_path(target_subpath, link_dest)
         return stowed.package if stowed else None
 
     def _find_stowed_path(
         self, target_subpath: str, link_dest: str
-    ) -> Optional[StowedPath]:
+    ) -> StowedPath | None:
         """
         Determine whether the given symlink within the target directory
         is a stowed path pointing to a member of a package under the stow dir.
@@ -1177,7 +1177,7 @@ class _Stower:
 
     def _parse_link_dest_as_package_subpath(
         self, link_dest: str
-    ) -> Optional[PackageSubpath]:
+    ) -> PackageSubpath | None:
         """Detect whether symlink destination is within current stow dir."""
         debug(4, 4, f"common prefix? link_dest={link_dest}; stow_path={self.stow_path}")
 
@@ -1194,7 +1194,7 @@ class _Stower:
 
     def _find_containing_marked_stow_dir(
         self, pkg_path_from_cwd: str
-    ) -> Optional[MarkedStowDir]:
+    ) -> MarkedStowDir | None:
         """Detect whether path is within a marked stow directory."""
         segments = [s for s in pkg_path_from_cwd.split("/") if s]
 
@@ -1214,7 +1214,7 @@ class _Stower:
 
         return None
 
-    def _get_link_task_action(self, path: str) -> Optional[Action]:
+    def _get_link_task_action(self, path: str) -> Action | None:
         """Finds the link task action for the given path, if there is one."""
         if path not in self.link_task_for:
             debug(4, 4, f"| link_task_action({path}): no task")
@@ -1227,7 +1227,7 @@ class _Stower:
         )
         return action
 
-    def _get_dir_task_action(self, path: str) -> Optional[Action]:
+    def _get_dir_task_action(self, path: str) -> Action | None:
         """Finds the dir task action for the given path, if there is one."""
         if path not in self.dir_task_for:
             debug(4, 4, f"| dir_task_action({path}): no task")
@@ -1542,7 +1542,7 @@ def _read_ignore_file(file_path: str) -> IgnorePatterns:
     file_path is relative to the target directory, so a cross-instance
     cache could hand one tree's patterns to an operation on another."""
     try:
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             patterns: set[str] = set()
             for line in f:
                 line = line.strip()
@@ -1555,7 +1555,7 @@ def _read_ignore_file(file_path: str) -> IgnorePatterns:
             # Always ignore the local ignore file itself
             patterns.add("^/" + re.escape(LOCAL_IGNORE_FILE) + "$")
             return _compile_ignore_patterns(patterns)
-    except IOError:
+    except OSError:
         return IgnorePatterns(None, None)
 
 

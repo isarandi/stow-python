@@ -32,7 +32,6 @@ import stat
 import sys
 from collections.abc import Iterator
 from enum import Enum, auto
-from typing import Optional
 
 
 class Mode(Enum):
@@ -60,7 +59,7 @@ def default_target() -> str:
 # emulates: long names match case-insensitively, "+" works as an option
 # prefix (getopt_compat), and there is no short-option bundling. A None
 # mode marks the value-taking target option.
-_OPTION_SPECS: tuple[tuple[tuple[str, ...], Optional[Mode]], ...] = (
+_OPTION_SPECS: tuple[tuple[tuple[str, ...], Mode | None], ...] = (
     (("b", "badlinks"), Mode.BAD_LINKS),
     (("a", "aliens"), Mode.ALIENS),
     (("l", "list"), Mode.LIST),
@@ -119,7 +118,7 @@ def parse_args(args: list[str]) -> tuple[str, Mode]:
             i += 1
             continue
 
-        attached: Optional[str] = None
+        attached: str | None = None
         if "=" in name and not name.startswith("="):
             name, attached = name.split("=", 1)
 
@@ -153,7 +152,7 @@ def parse_args(args: list[str]) -> tuple[str, Mode]:
 
 def _find_option(
     name: str, allow_abbrev: bool
-) -> Optional[tuple[tuple[str, ...], Optional[Mode]]]:
+) -> tuple[tuple[str, ...], Mode | None] | None:
     """Resolve an option name like Getopt::Long's default find_option: an
     exact match on a name or alias wins, else a unique prefix resolves,
     both case-insensitively. Returns the matching spec, or None if the
@@ -231,7 +230,7 @@ def _walk_target(target: str) -> Iterator[str]:
     only the symlink itself once — see docs/perl-differences.md.
     """
     try:
-        st: Optional[os.stat_result] = os.lstat(target)
+        st: os.stat_result | None = os.lstat(target)
     except OSError as e:
         print(f"Can't stat {target}: {e.strerror}", file=sys.stderr)
         return

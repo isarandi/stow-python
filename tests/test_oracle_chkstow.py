@@ -5,8 +5,6 @@ Each test creates a scenario, runs both implementations, and verifies
 they produce identical results (return code, stdout, stderr).
 """
 
-from __future__ import print_function
-
 import os
 
 from conftest import assert_chkstow_match

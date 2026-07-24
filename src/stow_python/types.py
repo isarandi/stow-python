@@ -35,7 +35,6 @@ import os
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Union
 
 
 class StowError(Exception):
@@ -100,7 +99,7 @@ class MoveTask:
     skipped: bool = False
 
 
-Task = Union[LinkTask, DirTask, MoveTask]
+Task = LinkTask | DirTask | MoveTask
 
 
 @dataclass(frozen=True)
@@ -157,8 +156,8 @@ class CleanupJob:
     target_subdir: str
 
 
-StowJob = Union[StowScanJob, StowNodeJob]
-UnstowJob = Union[UnstowScanJob, UnstowNodeJob, FoldJob, CleanupJob]
+StowJob = StowScanJob | StowNodeJob
+UnstowJob = UnstowScanJob | UnstowNodeJob | FoldJob | CleanupJob
 
 
 @dataclass(frozen=True)
@@ -190,8 +189,8 @@ class MarkedStowDir:
 class IgnorePatterns:
     """Compiled ignore patterns from stow ignore files."""
 
-    default_regexp: Optional[re.Pattern[str]]
-    local_regexp: Optional[re.Pattern[str]]
+    default_regexp: re.Pattern[str] | None
+    local_regexp: re.Pattern[str] | None
 
 
 @dataclass(frozen=True)

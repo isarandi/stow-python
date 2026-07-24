@@ -5,8 +5,6 @@ Uses property-based testing to generate random scenarios and verify
 Python and Perl implementations produce identical results.
 """
 
-from __future__ import print_function
-
 import os
 import tempfile
 
@@ -30,7 +28,7 @@ def try_create_packages(env, packages):
         for pkg_name, files in packages.items():
             env.create_package(pkg_name, files)
         return True
-    except (OSError, IOError):
+    except OSError:
         return False
 
 
@@ -142,7 +140,7 @@ def dotfiles_tree_st(draw, max_files=5):
     files = {}
     used_dirs = set()
 
-    for i in range(num_files):
+    for _ in range(num_files):
         # Mix of dot- prefixed and regular names
         if draw(st.booleans()):
             name = "dot-" + draw(path_component_st)

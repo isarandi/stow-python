@@ -36,7 +36,8 @@ import pwd
 import re
 import sys
 import traceback
-from typing import NoReturn, Optional, Sequence
+from typing import NoReturn
+from collections.abc import Sequence
 
 from stow_python.stow import _Stower, _compile_option_pattern
 from stow_python.types import StowError, StowInternalError, StowCLIError, StowConfig
@@ -77,8 +78,8 @@ def perl_shellwords(line: str) -> list[str]:
     Perl parses this as: --ignore=.git  (backslash consumed)
     """
     line = re.sub(r"^\s+", "", line)
-    pieces: list[Optional[str]] = []
-    word: Optional[str] = None
+    pieces: list[str | None] = []
+    word: str | None = None
 
     while line:
         m = _PARSE_LINE_RE.match(line)
@@ -326,7 +327,7 @@ _OPTION_SPECS = [
 ]
 
 
-def _find_long_option(name: str, allow_abbrev: bool) -> Optional[tuple[str, str, str]]:
+def _find_long_option(name: str, allow_abbrev: bool) -> tuple[str, str, str] | None:
     """Resolve a long option name like Getopt::Long's find_option.
 
     An exact name/alias match wins; otherwise a unique prefix resolves via
@@ -382,7 +383,7 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
             pkgs_to_stow.append(pkg)
 
     def apply_long_option(
-        given_name: str, primary: str, vtype: str, attached: Optional[str]
+        given_name: str, primary: str, vtype: str, attached: str | None
     ) -> None:
         """Apply one resolved long option, consuming the following argument
         as its value where Getopt::Long would."""
@@ -455,7 +456,7 @@ def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
 
         elif arg.startswith("--"):
             name = arg[2:]
-            attached: Optional[str] = None
+            attached: str | None = None
             # Getopt::Long only splits at "=" when at least one name
             # character precedes it ("--=x" is the unknown option "=x")
             if "=" in name and not name.startswith("="):
@@ -543,7 +544,7 @@ def get_config_file_options() -> tuple[dict, list[str], list[str]]:
 
     for file_path in stowrc_candidate_paths:
         try:
-            with open(file_path, "r") as f:
+            with open(file_path) as f:
                 for line in f:
                     # Parse like Perl's shellwords so .stowrc files
                     # written for GNU Stow behave identically
@@ -630,8 +631,8 @@ def expand_tilde_to_homedir(path: str) -> str:
 
 
 def get_homedir_from_passwd(
-    username: Optional[str] = None, uid: Optional[int] = None
-) -> Optional[str]:
+    username: str | None = None, uid: int | None = None
+) -> str | None:
     try:
         if username is not None:
             return pwd.getpwnam(username).pw_dir
@@ -643,7 +644,7 @@ def get_homedir_from_passwd(
 
 
 def show_usage_and_exit(
-    msg: Optional[str] = None, exit_code: Optional[int] = None
+    msg: str | None = None, exit_code: int | None = None
 ) -> NoReturn:
     """Print program usage message and exit."""
     if msg:
