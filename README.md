@@ -60,6 +60,8 @@ Automated equivalence testing does not replace human review, so the repository i
 1. **Perl ↔ `bug4bug`**: the bug-for-bug branch mirrors the Perl sub-for-sub and is held to the strictest oracle tests (including syscall sequences), so the cross-language comparison is between two texts designed to align.
 2. **`bug4bug` ↔ `main`**: a same-language diff of about two thousand lines, where every behavioral delta must correspond to an entry in [docs/perl-differences.md](docs/perl-differences.md).
 
+A [correspondence map](docs/correspondence-map.md) pairs every one of GNU Stow 2.4.1's 80 subroutines with its Python counterpart and classifies how close the correspondence is, so a reviewer can walk the Perl source top to bottom with nothing unaccounted for.
+
 Reviewers also do not have to trust our test scenarios: the `tests/test_*_both.py` files show how to write a new adversarial oracle scenario in a few lines, which then automatically checks exit codes, output bytes, tree state and syscalls against the real Perl Stow.
 
 ## Documentation
@@ -119,7 +121,7 @@ The test suite includes both ported unit tests from the original Perl codebase a
 
 Planned work, roughly in order of priority:
 
-- A **correspondence map** (each Perl sub → its Python counterpart, with notes) and a **reviewer's guide**, to lower the cost of independent human review further.
+- A **reviewer's guide** building on the [correspondence map](docs/correspondence-map.md), to lower the cost of independent human review further.
 - The **extreme test layer**: real cross-filesystem `--adopt`, disk-full and permission failures mid-operation, races, and large-scale trees ([docs/EXTREME_TESTS_PLAN.md](docs/EXTREME_TESTS_PLAN.md)); today only a monkeypatched EXDEV path is covered.
 - Broader **non-UTF-8 filename** coverage (currently one oracle scenario).
 - A **mutation-testing** pass to measure the suite's bug-catching power empirically.
