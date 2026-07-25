@@ -10,7 +10,7 @@ readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.10"
 authors = [
-    {name = "Istvan Sarandi", email = "istvan.sarandi@gmail.com"},
+    {name = "Istvan Sarandi", email = "prog@istvansarandi.com"},
 ]
 keywords = ["stow", "symlink", "dotfiles", "package-manager"]
 classifiers = [
