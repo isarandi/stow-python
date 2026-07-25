@@ -12,7 +12,7 @@ license = "GPL-3.0-or-later"
 # For Python 2.7, install via: python setup.py install
 requires-python = ">=2.7"
 authors = [
-    {name = "Istvan Sarandi", email = "istvan.sarandi@gmail.com"},
+    {name = "Istvan Sarandi", email = "prog@istvansarandi.com"},
 ]
 keywords = ["stow", "symlink", "dotfiles", "package-manager"]
 classifiers = [

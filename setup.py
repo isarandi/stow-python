@@ -30,7 +30,7 @@ setup(
     long_description=open('README.md').read() if os.path.exists('README.md') else '',
     long_description_content_type='text/markdown',
     author='Istvan Sarandi',
-    author_email='istvan.sarandi@gmail.com',
+    author_email='prog@istvansarandi.com',
     url='https://github.com/isarandi/stow-python',
     license='GPL-3.0-or-later',
     scripts=['bin/stow', 'bin/chkstow'],
