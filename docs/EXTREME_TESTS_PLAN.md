@@ -423,8 +423,7 @@ def test_100k_files(stow_env):
     links = os.listdir(stow_env.target_dir)
     assert len(links) == 100_000
 
-    # Performance check: should complete in reasonable time
-    # (baseline: ~30 seconds on modern hardware)
+    # Report throughput; no wall-clock assertion (machine-dependent)
     print(f"100k files stowed in {elapsed:.1f}s")
 ```
 
@@ -769,35 +768,35 @@ docker run -it --rm \
 
 Recommended implementation sequence:
 
-### Phase 1: Infrastructure (Week 1)
+### Phase 1: Infrastructure
 1. Create `tests/Dockerfile.extreme`
 2. Add `tests/extreme/conftest.py` with Docker detection, fixtures
 3. Add pytest markers to main `conftest.py`
 4. Create `.github/workflows/extreme-tests.yml`
 5. Add basic smoke test to verify infrastructure works
 
-### Phase 2: High-Value Tests (Week 2)
+### Phase 2: High-Value Tests
 1. Disk full during stow/unstow
 2. Maximum filename length
 3. Symlink loops (in target and package)
 4. Broken symlinks
 5. Basic unicode filenames
 
-### Phase 3: Medium-Value Tests (Week 3)
+### Phase 3: Medium-Value Tests
 1. Maximum path length
 2. 100k files test
 3. Unicode edge cases (NFD/NFC, RTL, zero-width)
 4. Special characters in paths
 5. Permission denied scenarios
 
-### Phase 4: Complex Tests (Week 4)
+### Phase 4: Complex Tests
 1. Race conditions (file deleted during planning)
 2. Concurrent stow operations
 3. Signal handling (SIGINT, SIGTERM)
 4. Read-only filesystem
 5. Out of inodes
 
-### Phase 5: Scale and Polish (Week 5)
+### Phase 5: Scale and Polish
 1. 1000 packages test
 2. Restow of large package set
 3. Performance benchmarks
@@ -845,11 +844,10 @@ The extreme test suite is complete when:
 
 1. All Priority 1 and 2 tests pass consistently
 2. CI runs extreme tests on every PR
-3. No test takes more than 2 minutes
-4. Docker container builds in under 5 minutes
-5. Local developers can run `./run-extreme-tests.sh` easily
-6. Documentation covers all known edge case behaviors
-7. Any Python/Perl differences are documented
+3. Every test terminates under its declared timeout rather than hanging
+4. Local developers can run `./run-extreme-tests.sh` easily
+5. Documentation covers all known edge case behaviors
+6. Any Python/Perl differences are documented
 
 ## Open Questions
 
