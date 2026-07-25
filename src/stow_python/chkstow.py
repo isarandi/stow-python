@@ -120,72 +120,85 @@ def parse_args(args: list[str]) -> tuple[str, Mode]:
     posixly_correct = "POSIXLY_CORRECT" in os.environ
     ok = True
 
+    # Every step of the scan reads args[i] and moves past it right away,
+    # so an option taking a separate value simply reads one more
     i = 0
     while i < len(args):
         arg = args[i]
+        i += 1
+
         if arg == "--":
             break
-        long_form = arg.startswith("--")
-        if long_form:
-            name = arg[2:]
-        elif len(arg) > 1 and arg.startswith("-"):
-            name = arg[1:]
-        elif arg.startswith("+") and not posixly_correct:
-            # getopt_compat accepts "+" as an option prefix, so a bare "+"
-            # is an option whose name is missing
-            if len(arg) == 1:
-                print("Missing option after +", file=sys.stderr)
-                ok = False
-                i += 1
-                continue
-            name = arg[1:]
-        else:
-            if posixly_correct:
-                break
-            i += 1
-            continue
 
-        attached: str | None = None
-        # Without getopt_compat (i.e. under POSIXLY_CORRECT) Getopt::Long
-        # splits an attached value off after "--" only, so "-t=DIR" is the
-        # unknown option "t=DIR" rather than --target=DIR
-        if (
-            (long_form or not posixly_correct)
-            and "=" in name
-            and not name.startswith("=")
-        ):
-            name, attached = name.split("=", 1)
+        split = _split_option_arg(arg, posixly_correct)
+        if split is None:
+            if posixly_correct:  # require_order: options end here
+                break
+            continue  # a non-option argument, which Perl chkstow ignores
+
+        name, attached = split
+        if not name:
+            print("Missing option after +", file=sys.stderr)
+            ok = False
+            continue
 
         spec = _find_option(name, allow_abbrev=not posixly_correct)
         if spec is None:
             print(f"Unknown option: {name.lower()}", file=sys.stderr)
             ok = False
-        else:
-            canonical, spec_mode = spec
-            if spec_mode is not None:
-                if attached is not None:
-                    print(
-                        f"Option {canonical} does not take an argument", file=sys.stderr
-                    )
-                    ok = False
-                else:
-                    mode = spec_mode
-            elif attached:
-                target = attached
-            elif attached is None and i + 1 < len(args):
-                i += 1
-                target = args[i]
-            else:
-                # An attached but empty value ("--target=") is no value at
-                # all to Getopt::Long, exactly like a missing one
-                print(f"Option {canonical} requires an argument", file=sys.stderr)
+            continue
+
+        canonical, spec_mode = spec
+        if spec_mode is not None:
+            if attached is not None:
+                print(f"Option {canonical} does not take an argument", file=sys.stderr)
                 ok = False
-        i += 1
+            else:
+                mode = spec_mode
+        elif attached:
+            target = attached
+        elif attached is None and i < len(args):
+            target = args[i]
+            i += 1
+        else:
+            # An attached but empty value ("--target=") is no value at
+            # all to Getopt::Long, exactly like a missing one
+            print(f"Option {canonical} requires an argument", file=sys.stderr)
+            ok = False
 
     if not ok:
         usage()
 
     return target, mode
+
+
+def _split_option_arg(arg: str, posixly_correct: bool) -> tuple[str, str | None] | None:
+    """Split one argument into an option name and its attached value.
+
+    Returns None if the argument is no option at all. Getopt::Long's
+    default configuration takes "--name" and "-name", and with
+    getopt_compat - which POSIXLY_CORRECT turns off - also "+name"; a
+    bare "+" is then an option prefix whose name is missing, reported as
+    such by the caller, so it comes back with an empty name.
+
+    Without getopt_compat an attached value splits off after "--" only,
+    so "-t=DIR" is the unknown option "t=DIR" rather than --target=DIR.
+    An "=" that opens the name never splits ("--=x" is the unknown option
+    "=x").
+    """
+    if arg.startswith("--"):
+        name, splits_at_equals = arg[2:], True
+    elif arg.startswith("-") and len(arg) > 1:
+        name, splits_at_equals = arg[1:], not posixly_correct
+    elif arg.startswith("+") and not posixly_correct:
+        name, splits_at_equals = arg[1:], True
+    else:
+        return None
+
+    if splits_at_equals and "=" in name and not name.startswith("="):
+        name, attached = name.split("=", 1)
+        return name, attached
+    return name, None
 
 
 def _find_option(name: str, allow_abbrev: bool) -> tuple[str, Mode | None] | None:
