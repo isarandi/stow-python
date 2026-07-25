@@ -343,6 +343,16 @@ substitution interpolates the empty value, so the pattern degenerates to
 guard on a non-empty `HOME` and print the clean line. Everything else
 about an empty `HOME` matches, including the `/.stowrc` probe it produces.
 
+The same warning-noise class appears when chkstow runs from a *deleted
+working directory* with a directory target: Perl's File::Find records the
+working directory as undefined, completes the whole scan, and then fails
+to return to it — two `Use of uninitialized value ... File/Find.pm`
+warning lines followed by `Can't cd to : No such file or directory` (the
+vanished directory interpolated as the empty string) and exit 2. We
+produce the same report, the same `Can't cd to :` line and the same
+exit 2, without the two warning lines. Pinned by
+`test_deleted_working_directory` in `tests/test_chkstow_both.py`.
+
 ## 20. `.stowrc` Is a Directory
 
 Perl's `open('<', ...)` on a directory *succeeds*; the subsequent read

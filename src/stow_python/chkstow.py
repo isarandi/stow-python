@@ -75,6 +75,18 @@ def main() -> None:
     if len(sys.argv) == 1:
         usage()
 
+    # A deleted working directory does not stop the scan (an absolute or
+    # default target needs no cwd), but it must not pass silently either:
+    # Perl's File::Find records the working directory up front and dies
+    # trying to return to it after the walk, so the report is produced and
+    # the run still fails. The check runs before parse_args so the flag
+    # reflects the state the run started in.
+    try:
+        os.getcwd()
+        cwd_vanished = False
+    except OSError:
+        cwd_vanished = True
+
     target, mode = parse_args(sys.argv[1:])
 
     if mode == Mode.BAD_LINKS:
@@ -86,6 +98,18 @@ def main() -> None:
     elif mode == Mode.LIST:
         for pkg in list_packages(target):
             print(pkg)
+
+    # File::Find only leaves the process directory when the target is a
+    # directory it actually entered (an unstattable target dies earlier,
+    # inside the walk, with exit 0), so only that case ends in the failed
+    # return. The message is File::Find's own, with the vanished directory
+    # interpolated as the empty string; its two "Use of uninitialized
+    # value" warning lines are interpreter noise we do not reproduce (see
+    # docs/perl-differences.md #19). Exit 2 is Perl's ENOENT from the
+    # failed chdir.
+    if cwd_vanished and os.path.isdir(target):
+        print("Can't cd to : No such file or directory", file=sys.stderr)
+        sys.exit(2)
 
 
 def configure_standard_streams() -> None:

@@ -25,7 +25,6 @@ asserting both behaviours.
 | `faithful` | Statement-for-statement port; no behavioural difference. |
 | `restructured` | Body reshaped (callback → context manager or generator, mutual recursion → explicit job stack, hash → dataclass, accessor → attribute) with no observable difference. |
 | `divergent_documented` | Behaviour differs only in ways recorded in `perl-differences.md` (entry numbers cited). |
-| `divergent_open` | A known, tracked behavioural difference not yet resolved or documented. |
 | `infrastructure_only` | Perl-runtime or test-harness plumbing with no user-visible effect and no counterpart. |
 
 Rows are in source-line order within each file.
@@ -132,7 +131,7 @@ Rows are in source-line order within each file.
 | --- | --- | --- | --- |
 | `process_options` (43-51) | `chkstow.py: parse_args`, `_split_option_arg`, `_find_option` | faithful | Getopt::Long's default configuration is hand-emulated: case-insensitive long names, unique-prefix abbreviation, single-dash long forms, `+` prefixes including a bare `+`, absence of bundling, `--` terminator, permute versus require-order, canonical names in diagnostics, empty attached values, accumulated errors and the single trailing usage call. |
 | `usage` (53-67) | `chkstow.py: usage`, `default_target` | divergent_documented | Heredoc becomes an f-string; both call sites and the exit-0-even-on-error behaviour are preserved, and the text is byte-identical. The only difference is the default target under `STOW_DIR=0` (#16). |
-| `check_stow` (69-88) | `chkstow.py: main`, `_walk_target`, mode functions | divergent_open | `find()` plus post-processing is restructured into a generator with per-mode filters; readlink rewriting, deletion of `''` and `..`, byte-order sort and traversal-order output are equivalent, and unreadable or unenterable directories warn in File::Find's wording. One open difference: with a deleted working directory Perl exits 2 (`Can't cd to :`) where we exit 0 silently — tracked, not yet resolved. |
+| `check_stow` (69-88) | `chkstow.py: main`, `_walk_target`, mode functions | divergent_documented | `find()` plus post-processing is restructured into a generator with per-mode filters; readlink rewriting, deletion of `''` and `..`, byte-order sort and traversal-order output are equivalent, and unreadable or unenterable directories warn in File::Find's wording. A deleted working directory still yields the full report, File::Find's `Can't cd to :` line and exit 2 on both sides; Perl's extra uninitialized-value warnings are #19. |
 | `skip_dirs` (90-98) | inline preprocess in `chkstow.py: _walk_target` | restructured | The preprocess callback is inlined into the walker: same `.stow`/`.notstowed` probe with the same short-circuit, same suppression of both entries and descent, same warning text (one trailing slash stripped, like File::Find) and exit status. |
 | `bad_links` (101-104) | `chkstow.py: find_bad_links` | restructured | The `-l && !-e` predicate is translated exactly, including the fresh stat that makes a dangling link bogus; the callback becomes a lazily consumed generator, so ordering is unchanged, and names that are not valid UTF-8 are written out byte for byte. |
 | `aliens` (107-109) | `chkstow.py: find_aliens` | restructured | Push-model callback becomes a pull-model generator; the `!-l && !-d` predicate, its short-circuit and its treatment of symlinked directories, fifos and unstattable entries are identical, including skipping directories File::Find cannot enter. |
@@ -146,24 +145,22 @@ Rows are in source-line order within each file.
 
 | Classification | Count |
 | --- | ---: |
-| `divergent_documented` | 34 |
+| `divergent_documented` | 35 |
 | `restructured` | 20 |
 | `faithful` | 21 |
 | `infrastructure_only` | 4 |
-| `divergent_open` | 1 |
 
 Per source file:
 
-| File | Subs | faithful | restructured | divergent_documented | divergent_open | infrastructure_only |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `lib/Stow.pm` | 51 | 15 | 13 | 20 | 0 | 3 |
-| `lib/Stow/Util.pm` | 10 | 2 | 2 | 5 | 0 | 1 |
-| `bin/stow` | 12 | 3 | 1 | 8 | 0 | 0 |
-| `bin/chkstow` | 7 | 1 | 4 | 1 | 1 | 0 |
-| **Total** | **80** | **21** | **20** | **34** | **1** | **4** |
+| File | Subs | faithful | restructured | divergent_documented | infrastructure_only |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `lib/Stow.pm` | 51 | 15 | 13 | 20 | 3 |
+| `lib/Stow/Util.pm` | 10 | 2 | 2 | 5 | 1 |
+| `bin/stow` | 12 | 3 | 1 | 8 | 0 |
+| `bin/chkstow` | 7 | 1 | 4 | 2 | 0 |
+| **Total** | **80** | **21** | **20** | **35** | **4** |
 
 Every `divergent_documented` citation resolves to a numbered entry in
 [perl-differences.md](perl-differences.md), each of which is pinned by a test
-asserting both the Perl and the Python behaviour. The single `divergent_open`
-row (chkstow under a deleted working directory) is the only known behavioural
-difference not yet fixed or formally documented.
+asserting both the Perl and the Python behaviour. No known behavioural
+difference is unfixed or undocumented.

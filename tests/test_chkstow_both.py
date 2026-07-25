@@ -382,3 +382,60 @@ class TestChkstowGetoptLongBoth:
         rc, stdout, _ = assert_chkstow_match(stow_env, ["-l", "-t", "."])
         assert rc == 0
         assert len(stdout.splitlines()) == 3, repr(stdout)
+
+
+class TestChkstowVanishedCwdBoth:
+    """chkstow run from a working directory that has been deleted."""
+
+    def test_deleted_working_directory(self, stow_env):
+        """perl-differences.md #19: deleted working directory.
+
+        With an absolute directory target, both implementations still
+        produce the full report, print File::Find's
+        "Can't cd to : No such file or directory" line and exit 2; Perl
+        additionally emits two uninitialized-value warning lines that we
+        do not reproduce (interpreter noise, #19).
+        """
+        import subprocess
+
+        from conftest import PERL_CHKSTOW, PERL_LIB, PYTHON_CHKSTOW
+
+        if PERL_CHKSTOW is None:
+            pytest.skip("Perl chkstow not found")
+
+        tgt = os.path.join(stow_env.tmpdir, "tgt")
+        os.makedirs(tgt)
+        os.symlink("nowhere", os.path.join(tgt, "dangling"))
+
+        def run_from_deleted_cwd(cmd):
+            # A process cannot be spawned in a deleted directory, so a
+            # shell wrapper enters the directory, removes it from within,
+            # and only then execs the tool
+            gone = os.path.join(stow_env.tmpdir, "gone")
+            os.makedirs(gone)
+            wrapper = 'cd "$1" && rmdir "$1" && shift && exec "$@"'
+            env = dict(os.environ)
+            env["PERL5LIB"] = PERL_LIB
+            proc = subprocess.run(
+                ["bash", "-c", wrapper, "bash", gone, *cmd],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            return proc.returncode, proc.stdout, proc.stderr
+
+        expected_report = f"Bogus link: {tgt}/dangling\n"
+        cd_error = "Can't cd to : No such file or directory"
+
+        prc, pout, perr = run_from_deleted_cwd(["perl", PERL_CHKSTOW, "-b", "-t", tgt])
+        assert prc == 2
+        assert pout == expected_report
+        assert cd_error in perr
+        assert "uninitialized" in perr
+
+        yrc, yout, yerr = run_from_deleted_cwd(
+            [sys.executable, PYTHON_CHKSTOW, "-b", "-t", tgt]
+        )
+        assert yrc == 2
+        assert yout == expected_report
+        assert yerr == cd_error + "\n"
