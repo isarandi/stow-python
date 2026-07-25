@@ -41,7 +41,7 @@ import sys
 from pathlib import Path
 
 # Order matters: dependencies must come before dependents
-STOW_MODULES = ["types", "util", "stow", "cli"]
+STOW_MODULES = ["types", "util", "perlcompat", "stow", "cli"]
 CHKSTOW_MODULES = ["chkstow"]
 
 COPYRIGHT_HEADER = """\

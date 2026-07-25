@@ -32,6 +32,7 @@ src/stow_python/
 ├── types.py       # Dataclasses, enums, exceptions
 ├── stow.py        # Core stow/unstow logic
 ├── cli.py         # Command-line interface
+├── perlcompat.py  # Perl library emulations (Getopt::Long, shellwords, regexps)
 ├── util.py        # Path utilities, debugging
 └── chkstow.py     # Target directory diagnostics
 ```

@@ -37,88 +37,20 @@ import re
 import signal
 import sys
 import traceback
+from dataclasses import dataclass, field
 from typing import NoReturn
 from collections.abc import Sequence
 
+from stow_python.perlcompat import (
+    OptionError,
+    find_long_option,
+    parse_optint_value,
+    perl_shellwords,
+    take_bundled_optint,
+)
 from stow_python.stow import _Stower, _compile_option_pattern
 from stow_python.types import StowError, StowInternalError, StowCLIError, StowConfig
 from stow_python.util import VERSION, PROGRAM_NAME, parent
-
-
-# The alternation mirrors the parse_line() pattern in Text::ParseWords 3.31:
-# a double-quoted segment, a single-quoted segment, or an unquoted segment
-# followed by a delimiter (end of string, whitespace, or a quote starting the
-# next segment). Perl uses atomic groups (?>...) purely as a stack guard;
-# the match language is identical without them.
-_PARSE_LINE_RE = re.compile(
-    r'(")([^\\"]*(?:\\.[^\\"]*)*)"'
-    r"|(')([^\\']*(?:\\.[^\\']*)*)'"
-    r'|((?:\\.|[^\\"\'])*?)(\Z|\s+|(?!^)(?=["\']))',
-    re.S,
-)
-
-
-def perl_shellwords(line: str) -> list[str]:
-    """
-    Parse a line using Perl's Text::ParseWords::shellwords() semantics,
-    i.e. parse_line('\\s+', 0, $line) after stripping leading whitespace.
-
-    Faithful port of Text::ParseWords 3.31. Behaviors that differ from
-    Python's shlex.split():
-    - In double quotes, backslash escapes ANY character: \\X -> X
-    - In single quotes, backslash is copied literally, but \\X still spans
-      two characters while scanning, so \\' does not close the quote
-    - Empty quoted words ("" or '') are kept
-    - A line that fails to parse (unmatched quote, trailing lone backslash)
-      yields no words at all: parse_line returns an empty list, so the
-      whole line is dropped
-    - Words are delimited by any whitespace (\\s+), not just space/tab
-
-    This matters for .stowrc files with regex patterns like:
-        --ignore="\\.git"
-    Perl parses this as: --ignore=.git  (backslash consumed)
-    """
-    line = re.sub(r"^\s+", "", line)
-    pieces: list[str | None] = []
-    word: str | None = None
-
-    while line:
-        m = _PARSE_LINE_RE.match(line)
-        if m is None:
-            # Unmatched quote or trailing backslash: parse_line returns ()
-            return []
-        dq, dq_text, sq, sq_text, unquoted, delim = m.groups()
-        quote = dq if dq is not None else sq
-
-        # Perl: return() unless defined($quote) || length($unquoted) || length($delim)
-        if quote is None and not unquoted and not delim:
-            return []
-
-        if quote is not None:
-            quoted = dq_text if dq is not None else sq_text
-            # Backslash unescaping happens only inside double quotes
-            if quote == '"':
-                quoted = re.sub(r"\\(.)", r"\1", quoted, flags=re.S)
-            segment = quoted
-        else:
-            segment = re.sub(r"\\(.)", r"\1", unquoted, flags=re.S)
-
-        word = ("" if word is None else word) + segment
-        line = line[m.end() :]
-
-        # \Z and lookahead delimiters are zero-width: only real whitespace
-        # ends the word here; end-of-string is handled just below.
-        if delim:
-            pieces.append(word)
-            word = None
-        if not line:
-            pieces.append(word)
-
-    # shellwords() pops a trailing undef left by a line ending in whitespace
-    if pieces and pieces[-1] is None:
-        pieces.pop()
-    # A None can only ever be the trailing element popped above
-    return [w for w in pieces if w is not None]
 
 
 # Perl derives its program name from $0 (bin/stow:469-470), so a renamed
@@ -127,6 +59,30 @@ def perl_shellwords(line: str) -> list[str]:
 # derived - Perl hardcodes it in Stow::Util (lib/Stow/Util.pm:45) - which
 # is why library code keeps using PROGRAM_NAME.
 _program_name = PROGRAM_NAME
+
+# Option table mirroring Perl stow's GetOptions() specification. Long
+# options resolve by exact name (or alias) first, then by unique prefix
+# like Getopt::Long's auto_abbrev, which POSIXLY_CORRECT disables.
+# Value types: "flag" (no value), "optint" (optional attached integer,
+# like 'verbose|v:i'), "string" (mandatory value, like 'dir|d=s').
+_OPTION_SPECS: list[tuple[tuple[str, ...], str]] = [
+    (("verbose", "v"), "optint"),
+    (("help", "h"), "flag"),
+    (("simulate", "n", "no"), "flag"),
+    (("version", "V"), "flag"),
+    (("compat", "p"), "flag"),
+    (("dir", "d"), "string"),
+    (("target", "t"), "string"),
+    (("adopt",), "flag"),
+    (("no-folding",), "flag"),
+    (("dotfiles",), "flag"),
+    (("ignore",), "string"),
+    (("override",), "string"),
+    (("defer",), "string"),
+    (("D", "delete"), "flag"),
+    (("S", "stow"), "flag"),
+    (("R", "restow"), "flag"),
+]
 
 
 def main() -> None:
@@ -224,120 +180,6 @@ def _main() -> None:
         stower.process_tasks()
 
 
-def _parse_bundled_options(
-    args: Sequence[str], arg_index: int, options: dict, action: str
-) -> tuple[str, int, bool, bool, bool]:
-    """Parse bundled short options like -npvS at args[arg_index].
-
-    A value-taking option (d, t) at the end of a bundle consumes the next
-    command-line argument, so `-nt DIR` works like `-n -t DIR`.
-
-    Returns (action, next_arg_index, had_option_error, should_show_help,
-    should_show_version).
-    """
-    had_option_error = False
-    should_show_help = False
-    should_show_version = False
-    chars = args[arg_index][1:]
-    i = 0
-
-    while i < len(chars):
-        char = chars[i]
-        rest = chars[i + 1 :]
-
-        if char == "n":
-            options["simulate"] = True
-        elif char == "p":
-            options["compat"] = True
-        elif char == "v":
-            taken = _take_bundled_optint(rest)
-            if taken is None:
-                options["verbose"] = options.get("verbose", 0) + 1
-            else:
-                options["verbose"], consumed = taken
-                i += consumed
-        elif char == "S":
-            action = "stow"
-        elif char == "D":
-            action = "unstow"
-        elif char == "R":
-            action = "restow"
-        elif char == "h":
-            should_show_help = True
-        elif char == "V":
-            should_show_version = True
-        elif char in ("d", "t") and rest:
-            options["dir" if char == "d" else "target"] = rest
-            i += len(rest)
-        elif char in ("d", "t"):
-            # Last character of the bundle: take the next argument as the
-            # value, like tar -xf FILE or ssh -p PORT
-            if arg_index + 1 < len(args):
-                arg_index += 1
-                options["dir" if char == "d" else "target"] = args[arg_index]
-            else:
-                print(f"Option {char} requires an argument", file=sys.stderr)
-                had_option_error = True
-        else:
-            # Like Perl, report every unknown letter and keep processing
-            # the rest of the bundle before the fatal usage exit
-            print(f"Unknown option: {char}", file=sys.stderr)
-            had_option_error = True
-        i += 1
-
-    return (
-        action,
-        arg_index,
-        had_option_error,
-        should_show_help,
-        should_show_version,
-    )
-
-
-# Getopt::Long's PAT_INT: an optional sign, then underscores and digits.
-# This is the whole grammar a --verbose/-v value has to satisfy, which is
-# why int() alone will not do: it would accept " 5" (Perl rejects it) and
-# reject "_4" and "3_0" (Perl accepts both).
-_GETOPT_INT_RE = re.compile(r"[-+]?_*[0-9][0-9_]*")
-
-
-def _parse_optint_value(value: str) -> int | None:
-    """Read an attached --verbose=N value like Getopt::Long does.
-
-    Returns None if the value is not a legal integer for the option, which
-    Getopt::Long reports and counts as an error. Underscores are stripped
-    from a fully matching value, so --verbose=3_0 sets level 30.
-    """
-    if not _GETOPT_INT_RE.fullmatch(value):
-        return None
-    return int(value.replace("_", ""))
-
-
-def _take_bundled_optint(rest: str) -> tuple[int, int] | None:
-    """Take a -v value off the front of a short-option bundle.
-
-    Returns (value, characters consumed), or None when the bundle simply
-    continues with more option letters (`-vx` is -v -x). Getopt::Long
-    numifies the matched text here instead of stripping underscores as
-    the attached long form does, so -v3_0 is level 3 and -v_4 is level 0.
-    """
-    m = _GETOPT_INT_RE.match(rest)
-    if not m:
-        return None
-    digits = re.match(r"[-+]?[0-9]+", m.group())
-    return (int(digits.group()) if digits else 0), m.end()
-
-
-def _strip_trailing_slashes(package: str) -> str:
-    """Perl's s{/+$}{} on a package name.
-
-    Perl's "$" - and Python's - also matches just before a final newline,
-    so a package directory literally named "a\\n" is still recognized when
-    shell completion writes it as "a/\\n".
-    """
-    return re.sub(r"/+$", "", package)
-
-
 def process_options() -> tuple[dict, list[str], list[str]]:
     """Parse and process command line and .stowrc file options.
 
@@ -367,6 +209,216 @@ def process_options() -> tuple[dict, list[str], list[str]]:
     return (options, pkgs_to_unstow, pkgs_to_stow)
 
 
+def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
+    """Parse command line options.
+
+    One left-to-right pass over the arguments, each of which is a "--"
+    terminator, a long option, the deprecated +n, a package name, or a
+    bundle of short options. Every arm hands the scan state to a helper
+    that may consume further arguments by advancing the state's index.
+
+    Perl scans the WHOLE argument list first and only then acts on what
+    it found: `GetOptions(...) or usage('')`, then --help, then --version
+    (bin/stow:614-624). So a bad option anywhere on the line beats an
+    earlier --help, and --help beats --version.
+
+    Returns: (options, pkgs_to_unstow, pkgs_to_stow)
+    """
+    # POSIXLY_CORRECT disables the + option prefix and long-option
+    # abbreviation in Perl's Getopt::Long. It would also enable
+    # require_order, but Perl stow's explicit 'permute' config overrides
+    # that, so packages and options may be interleaved either way.
+    posixly_correct = "POSIXLY_CORRECT" in os.environ
+
+    state = _ScanState(args=args)
+    while state.i < len(args):
+        arg = args[state.i]
+
+        if arg == "--":
+            _take_rest_as_packages(state)
+            break
+
+        elif arg.startswith("--"):
+            _scan_long_option(state, arg, allow_abbrev=not posixly_correct)
+
+        # Support +n for simulate (backwards compat with Perl's Getopt::Long)
+        # POSIXLY_CORRECT disables + prefix support
+        elif arg == "+n" and not posixly_correct:
+            print("Warning: +n is deprecated, use -n instead", file=sys.stderr)
+            state.options["simulate"] = True
+
+        # Package argument (including "-" which is a valid package name)
+        # Also matches +n when POSIXLY_CORRECT (+ not recognized as option prefix)
+        elif not arg.startswith("-") or arg == "-":
+            _add_package(state, arg)
+
+        else:
+            _scan_bundled_options(state, arg)
+
+        state.i += 1
+
+    if state.had_option_error:
+        show_usage_and_exit(exit_code=1)
+    if state.want_help:
+        show_usage_and_exit()
+    if state.want_version:
+        show_version_and_exit()
+
+    return (state.options, state.pkgs_to_unstow, state.pkgs_to_stow)
+
+
+@dataclass
+class _ScanState:
+    """Everything one scan over an argument list builds up and looks at.
+
+    `i` is the position of the argument being scanned; a helper that
+    consumes the following argument as an option value advances `i`
+    itself, and the scan loop then steps past the last one consumed.
+
+    A bad option is diagnosed on stderr where it is met and recorded in
+    `had_option_error`, so that the scan reaches every later argument
+    before the usage exit, exactly as Getopt::Long does.
+    """
+
+    args: Sequence[str]
+    i: int = 0
+    action: str = "stow"
+    options: dict = field(default_factory=dict)
+    pkgs_to_unstow: list[str] = field(default_factory=list)
+    pkgs_to_stow: list[str] = field(default_factory=list)
+    had_option_error: bool = False
+    want_help: bool = False
+    want_version: bool = False
+
+
+def _take_rest_as_packages(state: _ScanState) -> None:
+    """Take every argument after a "--" terminator as a package name.
+
+    POSIX says the terminator ends option processing, so a package may be
+    named there even if it starts with "-". (Perl stow silently DISCARDS
+    the arguments after "--" because Getopt::Long leaves them in @ARGV
+    unread; that is clearly unintended, so we diverge deliberately - see
+    docs/perl-differences.md.)
+    """
+    for pkg in state.args[state.i + 1 :]:
+        _add_package(state, pkg)
+
+
+def _add_package(state: _ScanState, pkg: str) -> None:
+    """Queue a package for the action the preceding -S/-D/-R selected."""
+    if state.action == "restow":
+        state.pkgs_to_unstow.append(pkg)
+        state.pkgs_to_stow.append(pkg)
+    elif state.action == "unstow":
+        state.pkgs_to_unstow.append(pkg)
+    else:
+        state.pkgs_to_stow.append(pkg)
+
+
+def _scan_long_option(state: _ScanState, arg: str, allow_abbrev: bool) -> None:
+    """Resolve one --option argument and apply it."""
+    name = arg[2:]
+    attached: str | None = None
+    # Getopt::Long only splits at "=" when at least one name
+    # character precedes it ("--=x" is the unknown option "=x")
+    if "=" in name and not name.startswith("="):
+        name, attached = name.split("=", 1)
+    try:
+        resolved = find_long_option(name, _OPTION_SPECS, allow_abbrev)
+        if resolved is None:
+            raise OptionError(f"Unknown option: {name}")
+        given_name, primary, vtype = resolved
+        _apply_long_option(state, given_name, primary, vtype, attached)
+    except OptionError as e:
+        print(e, file=sys.stderr)
+        state.had_option_error = True
+
+
+def _apply_long_option(
+    state: _ScanState,
+    given_name: str,
+    primary: str,
+    vtype: str,
+    attached: str | None,
+) -> None:
+    """Apply one resolved long option according to the value it takes."""
+    if vtype == "string":
+        _apply_string_option(state, given_name, primary, attached)
+    elif vtype == "optint":
+        _apply_optint_option(state, attached)
+    else:
+        _apply_flag_option(state, given_name, primary, attached)
+
+
+def _apply_string_option(
+    state: _ScanState, given_name: str, primary: str, attached: str | None
+) -> None:
+    """Apply a long option that requires a value, consuming the following
+    argument as that value where Getopt::Long would.
+
+    An empty attached value ("--ignore=") is rejected like Getopt::Long
+    rejects it: an empty regex or path is never what the user meant, and
+    an empty --ignore pattern would silently match every file. An empty
+    SEPARATE argument (--dir "") is accepted, also like Getopt::Long.
+    """
+    if attached:
+        value = attached
+    elif attached is None and state.i + 1 < len(state.args):
+        state.i += 1
+        value = state.args[state.i]
+    else:
+        raise OptionError(f"Option {given_name} requires an argument")
+
+    if primary in ("ignore", "defer", "override"):
+        _validate_option_regex(value, primary)
+        state.options.setdefault(primary, []).append(value)
+    else:  # dir, target
+        state.options[primary] = value
+
+
+def _apply_optint_option(state: _ScanState, attached: str | None) -> None:
+    """Apply --verbose, which takes an optional ATTACHED value only;
+    unlike Perl it never consumes the next command-line argument (see
+    docs/perl-differences.md)."""
+    if not attached:
+        state.options["verbose"] = state.options.get("verbose", 0) + 1
+        return
+
+    level = parse_optint_value(attached)
+    if level is None:
+        # Abort like Perl instead of silently proceeding with a default
+        # level and modifying the filesystem
+        raise OptionError(
+            f'Value "{attached}" invalid for option verbose (number expected)'
+        )
+    state.options["verbose"] = level
+
+
+def _apply_flag_option(
+    state: _ScanState, given_name: str, primary: str, attached: str | None
+) -> None:
+    """Apply a long option that takes no value."""
+    if attached is not None:
+        raise OptionError(f"Option {given_name} does not take an argument")
+
+    if primary == "simulate":
+        state.options["simulate"] = True
+    elif primary == "compat":
+        state.options["compat"] = True
+    elif primary in ("adopt", "no-folding", "dotfiles"):
+        state.options[primary] = True
+    elif primary == "D":
+        state.action = "unstow"
+    elif primary == "S":
+        state.action = "stow"
+    elif primary == "R":
+        state.action = "restow"
+    elif primary == "help":
+        state.want_help = True
+    else:  # version
+        state.want_version = True
+
+
 def _validate_option_regex(pattern: str, option: str) -> None:
     """Reject a malformed --ignore/--defer/--override pattern up front.
 
@@ -381,227 +433,81 @@ def _validate_option_regex(pattern: str, option: str) -> None:
         show_usage_and_exit(e.message)
 
 
-# Option table mirroring Perl stow's GetOptions() specification. Long
-# options resolve by exact name (or alias) first, then by unique prefix
-# like Getopt::Long's auto_abbrev, which POSIXLY_CORRECT disables.
-# Value types: "flag" (no value), "optint" (optional attached integer,
-# like 'verbose|v:i'), "string" (mandatory value, like 'dir|d=s').
-_OPTION_SPECS = [
-    (("verbose", "v"), "optint"),
-    (("help", "h"), "flag"),
-    (("simulate", "n", "no"), "flag"),
-    (("version", "V"), "flag"),
-    (("compat", "p"), "flag"),
-    (("dir", "d"), "string"),
-    (("target", "t"), "string"),
-    (("adopt",), "flag"),
-    (("no-folding",), "flag"),
-    (("dotfiles",), "flag"),
-    (("ignore",), "string"),
-    (("override",), "string"),
-    (("defer",), "string"),
-    (("D", "delete"), "flag"),
-    (("S", "stow"), "flag"),
-    (("R", "restow"), "flag"),
-]
+def _scan_bundled_options(state: _ScanState, arg: str) -> None:
+    """Apply a bundle of short options: -xyz is parsed as -x -y -z.
 
-
-class _OptionError(Exception):
-    """One Getopt::Long option diagnostic.
-
-    Getopt::Long warns about a bad option, counts it and carries on
-    scanning, so every problem on the command line is reported before the
-    single usage exit at the end; raising this instead of exiting on the
-    spot is what reproduces that.
+    A value-taking option (d, t) at the end of a bundle consumes the next
+    command-line argument, so `-nt DIR` works like `-n -t DIR`.
     """
+    chars = arg[1:]
+    pos = 0
 
+    while pos < len(chars):
+        char = chars[pos]
+        rest = chars[pos + 1 :]
 
-def _find_long_option(name: str, allow_abbrev: bool) -> tuple[str, str, str] | None:
-    """Resolve a long option name like Getopt::Long's find_option.
-
-    An exact name/alias match wins; otherwise a unique prefix resolves via
-    auto_abbrev. A prefix matching several options raises _OptionError.
-    Returns (matched_name, primary_name, value_type) — matched_name is the
-    name as resolved (alias as given, or the full name a prefix expanded
-    to), which is what error messages use — or None if unknown.
-    """
-    for names, vtype in _OPTION_SPECS:
-        if name in names:
-            return name, names[0], vtype
-    if not allow_abbrev or not name:
-        return None
-    hits = []
-    for names, vtype in _OPTION_SPECS:
-        matched = [nm for nm in names if nm.startswith(name)]
-        if matched:
-            hits.append((matched, names[0], vtype))
-    if not hits:
-        return None
-    if len(hits) > 1:
-        all_matched = sorted(nm for matched, _, _ in hits for nm in matched)
-        raise _OptionError(f"Option {name} is ambiguous ({', '.join(all_matched)})")
-    matched, primary, vtype = hits[0]
-    return matched[0], primary, vtype
-
-
-def parse_cli_options(args: Sequence[str]) -> tuple[dict, list[str], list[str]]:
-    """Parse command line options.
-
-    Returns: (options, pkgs_to_unstow, pkgs_to_stow)
-    """
-    options: dict = {}
-    pkgs_to_unstow: list[str] = []
-    pkgs_to_stow: list[str] = []
-    action = "stow"
-
-    # POSIXLY_CORRECT disables the + option prefix and long-option
-    # abbreviation in Perl's Getopt::Long. It would also enable
-    # require_order, but Perl stow's explicit 'permute' config overrides
-    # that, so packages and options may be interleaved either way.
-    posixly_correct = "POSIXLY_CORRECT" in os.environ
-
-    # Perl scans the WHOLE argument list first and only then acts on what
-    # it found: `GetOptions(...) or usage('')`, then --help, then
-    # --version (bin/stow:614-624). So a bad option anywhere on the line
-    # beats an earlier --help, and --help beats --version.
-    had_option_error = False
-    want_help = False
-    want_version = False
-
-    i = 0
-
-    def add_package(pkg: str) -> None:
-        if action == "restow":
-            pkgs_to_unstow.append(pkg)
-            pkgs_to_stow.append(pkg)
-        elif action == "unstow":
-            pkgs_to_unstow.append(pkg)
+        if char == "n":
+            state.options["simulate"] = True
+        elif char == "p":
+            state.options["compat"] = True
+        elif char == "v":
+            pos += _apply_bundled_verbose(state, rest)
+        elif char == "S":
+            state.action = "stow"
+        elif char == "D":
+            state.action = "unstow"
+        elif char == "R":
+            state.action = "restow"
+        elif char == "h":
+            state.want_help = True
+        elif char == "V":
+            state.want_version = True
+        elif char in ("d", "t") and rest:
+            state.options["dir" if char == "d" else "target"] = rest
+            pos += len(rest)
+        elif char in ("d", "t"):
+            _take_next_arg_as_path(state, char)
         else:
-            pkgs_to_stow.append(pkg)
+            # Like Perl, report every unknown letter and keep processing
+            # the rest of the bundle before the fatal usage exit
+            print(f"Unknown option: {char}", file=sys.stderr)
+            state.had_option_error = True
+        pos += 1
 
-    def apply_long_option(
-        given_name: str, primary: str, vtype: str, attached: str | None
-    ) -> None:
-        """Apply one resolved long option, consuming the following argument
-        as its value where Getopt::Long would."""
-        nonlocal i, action, want_help, want_version
-        if vtype == "string":
-            # An empty attached value ("--ignore=") is rejected like
-            # Getopt::Long rejects it: an empty regex or path is never
-            # what the user meant, and an empty --ignore pattern would
-            # silently match every file. An empty SEPARATE argument
-            # (--dir "") is accepted, also like Getopt::Long.
-            if attached:
-                value = attached
-            elif attached is None and i + 1 < len(args):
-                i += 1
-                value = args[i]
-            else:
-                raise _OptionError(f"Option {given_name} requires an argument")
-            if primary in ("ignore", "defer", "override"):
-                _validate_option_regex(value, primary)
-                options.setdefault(primary, []).append(value)
-            else:  # dir, target
-                options[primary] = value
-        elif vtype == "optint":
-            # --verbose takes an optional ATTACHED value only; unlike
-            # Perl it never consumes the next command-line argument
-            # (see docs/perl-differences.md)
-            if not attached:
-                options["verbose"] = options.get("verbose", 0) + 1
-            else:
-                level = _parse_optint_value(attached)
-                if level is None:
-                    # Abort like Perl instead of silently proceeding with
-                    # a default level and modifying the filesystem
-                    raise _OptionError(
-                        f'Value "{attached}" invalid for option verbose (number expected)'
-                    )
-                options["verbose"] = level
-        else:  # flag
-            if attached is not None:
-                raise _OptionError(f"Option {given_name} does not take an argument")
-            if primary == "simulate":
-                options["simulate"] = True
-            elif primary == "compat":
-                options["compat"] = True
-            elif primary in ("adopt", "no-folding", "dotfiles"):
-                options[primary] = True
-            elif primary == "D":
-                action = "unstow"
-            elif primary == "S":
-                action = "stow"
-            elif primary == "R":
-                action = "restow"
-            elif primary == "help":
-                want_help = True
-            else:  # version
-                want_version = True
 
-    while i < len(args):
-        arg = args[i]
+def _apply_bundled_verbose(state: _ScanState, rest: str) -> int:
+    """Apply a -v inside a bundle, with the value attached to it if any.
 
-        # POSIX "--" terminator: everything after it is a package name,
-        # even if it starts with "-". (Perl stow silently DISCARDS the
-        # arguments after "--" because Getopt::Long leaves them in @ARGV
-        # unread; that is clearly unintended, so we diverge deliberately —
-        # see docs/perl-differences.md.)
-        if arg == "--":
-            for pkg in args[i + 1 :]:
-                add_package(pkg)
-            break
+    Returns how many characters of the bundle that value took up, which
+    is zero when the bundle just continues with more option letters.
+    """
+    taken = take_bundled_optint(rest)
+    if taken is None:
+        state.options["verbose"] = state.options.get("verbose", 0) + 1
+        return 0
+    state.options["verbose"], consumed = taken
+    return consumed
 
-        elif arg.startswith("--"):
-            name = arg[2:]
-            attached: str | None = None
-            # Getopt::Long only splits at "=" when at least one name
-            # character precedes it ("--=x" is the unknown option "=x")
-            if "=" in name and not name.startswith("="):
-                name, attached = name.split("=", 1)
-            try:
-                resolved = _find_long_option(name, allow_abbrev=not posixly_correct)
-                if resolved is None:
-                    raise _OptionError(f"Unknown option: {name}")
-                given_name, primary, vtype = resolved
-                apply_long_option(given_name, primary, vtype, attached)
-            except _OptionError as e:
-                print(e, file=sys.stderr)
-                had_option_error = True
 
-        # Support +n for simulate (backwards compat with Perl's Getopt::Long)
-        # POSIXLY_CORRECT disables + prefix support
-        elif arg == "+n" and not posixly_correct:
-            print("Warning: +n is deprecated, use -n instead", file=sys.stderr)
-            options["simulate"] = True
+def _take_next_arg_as_path(state: _ScanState, char: str) -> None:
+    """Take the argument following the bundle as the value of a -d/-t
+    ending it, like tar -xf FILE or ssh -p PORT."""
+    if state.i + 1 < len(state.args):
+        state.i += 1
+        state.options["dir" if char == "d" else "target"] = state.args[state.i]
+    else:
+        print(f"Option {char} requires an argument", file=sys.stderr)
+        state.had_option_error = True
 
-        # Package argument (including "-" which is a valid package name)
-        # Also matches +n when POSIXLY_CORRECT (+ not recognized as option prefix)
-        elif not arg.startswith("-") or arg == "-":
-            add_package(arg)
 
-        else:
-            # Bundled short options: -xyz is parsed as -x -y -z
-            (
-                action,
-                i,
-                bundle_error,
-                bundle_help,
-                bundle_version,
-            ) = _parse_bundled_options(args, i, options, action)
-            had_option_error = had_option_error or bundle_error
-            want_help = want_help or bundle_help
-            want_version = want_version or bundle_version
+def _strip_trailing_slashes(package: str) -> str:
+    """Perl's s{/+$}{} on a package name.
 
-        i += 1
-
-    if had_option_error:
-        show_usage_and_exit(exit_code=1)
-    if want_help:
-        show_usage_and_exit()
-    if want_version:
-        show_version_and_exit()
-
-    return (options, pkgs_to_unstow, pkgs_to_stow)
+    Perl's "$" - and Python's - also matches just before a final newline,
+    so a package directory literally named "a\\n" is still recognized when
+    shell completion writes it as "a/\\n".
+    """
+    return re.sub(r"/+$", "", package)
 
 
 def sanitize_path_options(options: dict) -> None:
