@@ -100,18 +100,20 @@ truth table is long precisely so that every case is visible.
 | `configure_standard_streams` | 19 | 2 | 9 | |
 | `_main` | 42 | 3 | 8 | Build config, plan, report conflicts or execute. |
 | `process_options` | 27 | 2 | 8 | CLI-over-rc merge with the list-append rule. |
-| `parse_cli_options` | 56 | 2 | 9 | Five-arm dispatcher (`--` / long option / `+n` / package / bundle) over an explicit `_ScanState`; errors-then-help-then-version acted on after the scan. Reads as a sentence. |
-| `_take_rest_as_packages` | 11 | 1 | 10 | |
-| `_add_package` | 9 | 1 | 10 | Action-directed append. |
-| `_scan_long_option` | 17 | 2 | 9 | Split `=`, resolve, apply, collect the diagnostic. |
-| `_apply_long_option` | 14 | 1 | 9 | Three-way dispatch on value type. |
-| `_apply_string_option` | 24 | 1 | 8 | The attached/separate/missing value rules, spelled out. |
-| `_apply_optint_option` | 16 | 1 | 9 | |
-| `_apply_flag_option` | 23 | 1 | 9 | Flag table plus action switching. |
+| `parse_cli_options` | 6 | 0 | 10 | Builds the scanner and returns its result. |
+| `_ArgumentScanner.__init__` | 10 | 0 | 10 | The scan state, one named attribute each. |
+| `_ArgumentScanner.scan` | 55 | 2 | 9 | Five-arm dispatcher (`--` / long option / `+n` / package / bundle) over the scanner's own state; errors-then-help-then-version acted on after the scan. Reads as a sentence. |
+| `_ArgumentScanner._take_rest_as_packages` | 11 | 1 | 10 | |
+| `_ArgumentScanner._add_package` | 9 | 1 | 10 | Action-directed append. |
+| `_ArgumentScanner._scan_long_option` | 17 | 2 | 9 | Split `=`, resolve, apply, collect the diagnostic. |
+| `_ArgumentScanner._apply_long_option` | 10 | 1 | 9 | Three-way dispatch on value type. |
+| `_ArgumentScanner._apply_string_option` | 24 | 1 | 8 | The attached/separate/missing value rules, spelled out. |
+| `_ArgumentScanner._apply_optint_option` | 16 | 1 | 9 | |
+| `_ArgumentScanner._apply_flag_option` | 23 | 1 | 9 | Flag table plus action switching. |
+| `_ArgumentScanner._scan_bundled_options` | 40 | 2 | 7 | Still a character loop that consumes its own tail — that is what bundling is — but flat, with the state mutations named. |
+| `_ArgumentScanner._apply_bundled_verbose` | 12 | 1 | 8 | Returns characters consumed. |
+| `_ArgumentScanner._take_next_arg_as_path` | 9 | 1 | 9 | |
 | `_validate_option_regex` | 12 | 1 | 9 | |
-| `_scan_bundled_options` | 40 | 2 | 7 | Still a character loop that consumes its own tail — that is what bundling is — but flat, with the state mutations named. |
-| `_apply_bundled_verbose` | 12 | 1 | 8 | Returns characters consumed. |
-| `_take_next_arg_as_path` | 9 | 1 | 9 | |
 | `_strip_trailing_slashes` | 8 | 0 | 9 | |
 | `sanitize_path_options` | 19 | 2 | 8 | |
 | `check_packages` | 8 | 2 | 9 | |
@@ -188,12 +190,16 @@ of `bin/stow`'s subs that it is. chkstow's `parse_args` emulates a
 *different* Getopt::Long configuration and stays self-contained in
 `chkstow.py`, which builds standalone.
 
-**The argument scanners hold their state explicitly**: `parse_cli_options`
-dispatches over a `_ScanState` passed to named helpers — no closures over
-loop state, no `nonlocal`, no tuple juggling. Equivalence with the previous
-scanner was established by differential fuzzing (about 183,000 invocations
-comparing return value, stdout, stderr and exit status, with and without
-`POSIXLY_CORRECT`, zero mismatches) on top of the oracle suite.
+**The argument scanner holds its state explicitly**: `_ArgumentScanner`
+keeps the scan position, the selected action, the collected options and the
+error/help/version flags as attributes, and each arm of `scan()` dispatches
+to a method that names the state it touches — no closures over loop state,
+no `nonlocal`, no tuple juggling. `parse_cli_options` is the module-level
+entry point that builds one and returns its result. Equivalence with the
+predecessor scanners is established by differential fuzzing (comparing
+return value, stdout, stderr and exit status over tens of thousands of
+argument vectors, with and without `POSIXLY_CORRECT`, zero mismatches) on
+top of the oracle suite.
 
 **One shared ignore-file line parser** (`_parse_ignore_lines`) serves both
 `_read_ignore_file` and `_get_default_global_ignore_regexps`.
