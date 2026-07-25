@@ -1608,18 +1608,29 @@ def _read_ignore_file(file_path: str) -> IgnorePatterns | None:
         return None
 
     with f:
-        patterns: set[str] = set()
-        for line in f:
-            line = line.strip(_ASCII_WHITESPACE)
-            if line.startswith("#") or not line:
-                continue
-            line = re.sub(f"[{_ASCII_WHITESPACE}]+#.+", "", line)
-            line = line.replace("\\#", "#")
-            patterns.add(line)
+        patterns = _parse_ignore_lines(f)
 
     # Always ignore the local ignore file itself
     patterns.add(_SELF_IGNORE_PATTERN)
     return _compile_ignore_patterns(patterns)
+
+
+def _parse_ignore_lines(lines: Iterable[str]) -> set[str]:
+    """Collect the ignore patterns stated by the lines of an ignore file.
+
+    Mirrors Perl's get_ignore_regexps_from_fh: ASCII-only whitespace
+    stripping, whole-line comments, a trailing comment separated by
+    whitespace, `\\#` unescaping, and deduplication.
+    """
+    patterns: set[str] = set()
+    for line in lines:
+        line = line.strip(_ASCII_WHITESPACE)
+        if line.startswith("#") or not line:
+            continue
+        line = re.sub(f"[{_ASCII_WHITESPACE}]+#.+", "", line)
+        line = line.replace("\\#", "#")
+        patterns.add(line)
+    return patterns
 
 
 def _compile_ignore_patterns(patterns: set[str]) -> IgnorePatterns:
@@ -1683,14 +1694,6 @@ _darcs
 ^/LICENSE.*
 ^/COPYING
 """
-    patterns: set[str] = set()
-    for line in default_patterns.strip().split("\n"):
-        line = line.strip(_ASCII_WHITESPACE)
-        if line.startswith("#") or not line:
-            continue
-        line = re.sub(f"[{_ASCII_WHITESPACE}]+#.+", "", line)
-        line = line.replace("\\#", "#")
-        patterns.add(line)
-
+    patterns = _parse_ignore_lines(default_patterns.strip().split("\n"))
     patterns.add(_SELF_IGNORE_PATTERN)
     return _compile_ignore_patterns(patterns)
