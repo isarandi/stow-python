@@ -671,13 +671,13 @@ class TestCliOptionsBoth:
         assert perr == "" and yerr == ""
 
     def test_package_named_double_dash_o_matches(self, stow_env):
-        """Package-like arg '--o=0' now parses identically on both.
+        """Package-like arg '--o=0' parses identically on both.
 
         The Getopt::Long emulation reproduces Perl's '--option=value'
         handling: '--o=0' is consumed as an unknown-but-valued option,
         leaving no packages, so both report 'No packages to stow or unstow'
         (exit 1). Under POSIXLY_CORRECT both instead report 'Unknown
-        option: o'. (This was documented divergence #1, now resolved.)
+        option: o'.
         """
         stow_env.create_package("pkg", {"bin/file": "content"})
 

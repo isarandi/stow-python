@@ -1,24 +1,19 @@
 # Known Differences from GNU Stow (Perl)
 
-This document catalogues behavioral differences between stow-python and GNU Stow 2.4.1 (Perl).
-These are edge cases discovered through property-based testing with Hypothesis.
+This document catalogues every known behavioral difference between
+stow-python and GNU Stow 2.4.1 (Perl). The differences were discovered
+through property-based testing with Hypothesis, side-by-side CLI probing
+against the Perl executable, and a subroutine-by-subroutine comparison of
+the two codebases (see [correspondence-map.md](correspondence-map.md)).
+Every behavioral entry is pinned by a test asserting both the Perl and
+the Python behavior, so silent drift on either side fails the suite; the
+purely syscall-level entries are enforced by the strace comparison layer
+that runs in every oracle scenario.
 
-## 1. Package Names Starting with `--` (Long Option Style) — Resolved, Now Matches
-
-**Example:** Package named `--o=0`
-
-| Implementation | Behavior |
-|----------------|----------|
-| Perl | Getopt::Long consumes `--o=0` as an unknown-but-valued option, then reports "No packages to stow or unstow" (exit 1). Under `POSIXLY_CORRECT`, reports "Unknown option: o" (exit 1). |
-| Python | Identical: "No packages to stow or unstow" (exit 1), or "Unknown option: o" under `POSIXLY_CORRECT`. |
-
-**Result:** No longer a divergence. The Getopt::Long emulation now reproduces
-Perl's `--option=value` handling exactly, so both implementations produce the
-same message and exit code.
-
-**Pinned by:** an equality test
-(`test_package_named_double_dash_o_matches` in `tests/test_cli_options_both.py`)
-that asserts both implementations match in default and `POSIXLY_CORRECT` modes.
+Entry numbers are stable identifiers: they are cited from code comments,
+tests and the correspondence map. When a difference is eliminated, its
+entry is removed and its number retired rather than reused, so the
+numbering may have gaps.
 
 ## 2. Package Names Starting with `-` + Non-ASCII Bytes
 
