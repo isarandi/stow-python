@@ -35,6 +35,7 @@ import os
 import re
 from dataclasses import dataclass
 from enum import Enum
+from typing import Union
 
 
 class StowError(Exception):
@@ -99,7 +100,9 @@ class MoveTask:
     skipped: bool = False
 
 
-Task = LinkTask | DirTask | MoveTask
+# typing.Union rather than the | operator: the aliases are evaluated at
+# runtime, and runtime unions of classes need Python 3.10
+Task = Union[LinkTask, DirTask, MoveTask]
 
 
 @dataclass(frozen=True)
@@ -156,8 +159,8 @@ class CleanupJob:
     target_subdir: str
 
 
-StowJob = StowScanJob | StowNodeJob
-UnstowJob = UnstowScanJob | UnstowNodeJob | FoldJob | CleanupJob
+StowJob = Union[StowScanJob, StowNodeJob]
+UnstowJob = Union[UnstowScanJob, UnstowNodeJob, FoldJob, CleanupJob]
 
 
 @dataclass(frozen=True)

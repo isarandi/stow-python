@@ -56,6 +56,9 @@ reproduced; the .postN suffix counts stow-python releases on top of it.
     GNU Stow.
   - CI now runs on the product branch and installs the package under
     test before running the test suite.
+  - The supported Python floor is lowered from 3.10 to 3.9, so the
+    single-file executables run on the interpreter shipped by current
+    macOS and older enterprise distributions.
 
 * Changes in version 2.4.1 (2026)
 

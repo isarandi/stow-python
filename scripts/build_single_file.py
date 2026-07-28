@@ -39,6 +39,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Order matters: dependencies must come before dependents
 STOW_MODULES = ["types", "util", "perlcompat", "stow", "cli"]
@@ -106,7 +107,8 @@ if __name__ == "__main__":
 """
 
 # One (module, asname) or (name, asname) pair of an import statement
-_ImportPair = tuple[str, str | None]
+# Evaluated at runtime, so typing.Optional rather than a 3.10 union
+_ImportPair = tuple[str, Optional[str]]
 
 
 def read_version_constants(util_path: Path) -> tuple[str, str]:

@@ -1023,7 +1023,7 @@ def find_unexpected_syscall_diffs(perl_ops, python_ops):
         return f"Operation count mismatch: Perl {len(perl_ops)} vs Python {len(python_ops)}"
 
     unexpected = []
-    for i, (perl_op, python_op) in enumerate(zip(perl_ops, python_ops, strict=True)):
+    for i, (perl_op, python_op) in enumerate(zip(perl_ops, python_ops)):
         if perl_op != python_op:
             if not is_expected_syscall_diff(perl_op, python_op):
                 unexpected.append(

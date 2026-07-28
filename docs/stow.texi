@@ -211,7 +211,7 @@ possible to rebuild the target tree (e.g., @file{/usr/local}).
 GNU Stow is implemented as a combination of a Perl script providing a
 CLI interface, and a backend Perl module which does most of the work.
 Stow-Python, which this manual accompanies, is a reimplementation of
-the same program written in Python; it requires Python 3.10 or later
+the same program written in Python; it requires Python 3.9 or later
 and has no third-party dependencies.  Its behaviour is identical to
 that of GNU Stow version @value{VERSION}, so this manual applies
 equally to both implementations.
@@ -221,7 +221,7 @@ which provides the @command{stow} and @command{chkstow} commands.
 Alternatively, since it has no third-party dependencies, the
 self-contained single-file @file{bin/stow} script from a release can
 be copied to any convenient location and run directly with any Python
-3.10 (or later) interpreter.
+3.9 (or later) interpreter.
 
 For information about the latest version of GNU Stow, you can refer to
 @uref{http://www.gnu.org/software/stow/}.  For information about

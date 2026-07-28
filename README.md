@@ -1,6 +1,6 @@
 # Stow-Python
 
-This is a pedantically faithful, single-file, dependency-free Python reimplementation of all of [GNU Stow](https://www.gnu.org/software/stow/), the symlink farm manager, that runs on Python 3.10 and above.
+This is a pedantically faithful, single-file, dependency-free Python reimplementation of all of [GNU Stow](https://www.gnu.org/software/stow/), the symlink farm manager, that runs on Python 3.9 and above.
 
 **Note:** Stow-Python is an independent reimplementation and not an official GNU project; it is not affiliated with or endorsed by the GNU Project or the GNU Stow maintainers. Throughout this document, "GNU Stow" refers to the original Perl program.
 
@@ -43,13 +43,13 @@ Since Stow-Python is an exact reimplementation of GNU Stow, you can refer to the
 - **Oracle testing.** Black-box tests run the real Perl GNU Stow 2.4.1 and this implementation side by side on the same scenarios and require identical results on four levels: exit codes, byte-exact stdout and stderr, whole-tree filesystem state (file types, contents, permissions, ownership and symlink destinations), and even the ordered sequence of filesystem syscalls observed via strace. Each scenario runs with and without `POSIXLY_CORRECT`.
 - **Property-based testing.** [Hypothesis](https://hypothesis.readthedocs.io/) generates randomized package trees and operation sequences, each checked against the Perl oracle.
 - **A divergence contract.** Every intentional difference from the Perl implementation — mostly Perl bugs we refuse to reproduce, plus a few interpreter-level artifacts — is catalogued in [docs/perl-differences.md](docs/perl-differences.md) *and* pinned by a test that asserts both the Perl behavior and the Python behavior, so silent drift on either side fails the suite. New divergences are not accepted without both.
-- **Continuous integration.** CI builds the Perl GNU Stow 2.4.1 oracle from source and runs the full suite on Python 3.10 through 3.14 on Linux (with the strace layer mandatory) and on macOS, alongside pinned lint/type gates, a packaging build check and Texinfo validation.
+- **Continuous integration.** CI builds the Perl GNU Stow 2.4.1 oracle from source and runs the full suite on Python 3.9 through 3.14 on Linux (with the strace layer mandatory) and on macOS, alongside pinned lint/type gates, a packaging build check and Texinfo validation.
 
 Emulation runs deep where it matters for compatibility: option parsing reproduces Perl `Getopt::Long` semantics (bundling, unique-prefix abbreviation, ambiguity errors, `POSIXLY_CORRECT`), `.stowrc` parsing reproduces `Text::ParseWords::shellwords`, and verbose debug output is byte-identical up to the highest levels except for two documented, provably unmatchable lines.
 
 ## Repository layout
 
-- **`main`** (this branch) — the maintained product: idiomatic Python 3.10+ with dataclasses and enums, sources in [`src/stow_python/`](src/stow_python/), bundled into standalone single-file executables.
+- **`main`** (this branch) — the maintained product: idiomatic Python 3.9+ with dataclasses and enums, sources in [`src/stow_python/`](src/stow_python/), bundled into standalone single-file executables.
 - **`bug4bug`** — a bug-for-bug reference that replicates the Perl implementation *exactly*, including its bugs, warning quirks and syscall sequences. It serves as the executable answer key for what Perl does.
 - **`py27-literal`** — a frozen, Python 2.7-compatible literal transpilation of the Perl code, kept for ancient systems. It follows the original Perl logic line by line; `bin/` is the hand-maintained source there.
 
@@ -102,7 +102,7 @@ The single-file executables (`bin/stow` and `bin/chkstow`) are built from the mu
 python scripts/build_single_file.py
 ```
 
-This bundles all modules into standalone scripts with no dependencies beyond Python 3.10+.
+This bundles all modules into standalone scripts with no dependencies beyond Python 3.9+.
 
 ## Run the tests
 
