@@ -73,6 +73,10 @@ def try_create_packages(env, packages):
 # divergence is pinned by test_stowrc_is_a_directory in
 # tests/test_divergence_pinning_both.py, so generating it here would only
 # rediscover it at random.
+# Also exclude "0": Perl treats the string "0" as false, so it cannot
+# recognize a package of that name as a link's owner and leaves emptied
+# directories behind on unstow — documented divergence #25, pinned by
+# TestZeroIsFalseInPerl in tests/test_divergence_pinning_both.py.
 # See docs/perl-differences.md for details on option parsing differences
 name_st = st.text(
     min_size=1,
@@ -83,6 +87,7 @@ name_st = st.text(
     and not x.startswith("-")
     and not x.startswith("+")
     and x != ".stowrc"
+    and x != "0"
 )
 
 # Strategy for file content

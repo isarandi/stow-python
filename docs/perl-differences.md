@@ -633,6 +633,9 @@ The hypothesis-based oracle tests (`tests/test_oracle_hypothesis.py`) filter out
 - A package named `.stowrc` is filtered: the runs use the stow dir as their
   working directory, so it would make `./.stowrc` a directory — divergence
   #20, already pinned by its own test
+- A package named `0` is filtered: Perl's string-`"0"` falsiness stops it
+  from recognizing that package as a link's owner — divergence #25,
+  already pinned by its own tests
 
 These filters ensure the oracle tests focus on behavioral equivalence for realistic inputs rather than obscure edge cases where Perl has bugs or undefined behavior.
 
