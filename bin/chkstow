@@ -50,6 +50,15 @@ Package = {}
 Stow_dir = ''
 Target = DEFAULT_TARGET
 
+# Perl compares strings by byte value when sorting; Python 3 compares the
+# decoded code points instead, which orders file names that are not valid
+# UTF-8 differently. Sorting on the raw bytes restores Perl's order. Under
+# Python 2 a str already is bytes, so the default key is the right one.
+if hasattr(os, 'fsencode'):
+    BYTE_ORDER_KEY = os.fsencode
+else:
+    BYTE_ORDER_KEY = None
+
 
 # ---------------------------------------------------------------------------
 # Mode callbacks - called by File::Find-like walker
@@ -91,6 +100,17 @@ def list_wanted(entry, full_path, is_link):
 # ---------------------------------------------------------------------------
 
 
+def _under_target(target, relative):
+    """Build the reported path of an entry below the walk's top item.
+
+    Perl: _is_root($p_dir) ? "$p_dir$rel" : "$p_dir/$rel" - the root
+    directory already ends in the separator, everything else needs one.
+    """
+    if target == "/":
+        return target + relative
+    return target + "/" + relative
+
+
 def _path_exists(path):
     """Check if path exists using stat (like Perl's -e)."""
     try:
@@ -108,13 +128,27 @@ def _walk_target(target, wanted):
     """
     # File::Find saves cwd at start and returns to it at end
     start_cwd = os.getcwd()
+    # The lstat sees the argument exactly as given, so a trailing slash
+    # still forces the ENOTDIR of "file/".
     try:
         st = os.lstat(target)
     except OSError as e:
+        stat_error = e
+        st = None
+    else:
+        stat_error = None
+
+    # Perl: $top_item =~ s|/\z|| unless _is_root($top_item) - exactly one
+    # trailing slash goes, and the root directory keeps its own. Every
+    # reported name and message below uses the shortened form.
+    if target != "/" and target.endswith("/"):
+        target = target[:-1]
+
+    if st is None:
         # File::Find warns and checks nothing. Perl's warn appends its
         # " at <script> line N." source location, which the test harness
         # normalizes away like the other Perl warning locations.
-        sys.stderr.write("Can't stat %s: %s\n" % (target, e.strerror))
+        sys.stderr.write("Can't stat %s: %s\n" % (target, stat_error.strerror))
         return
 
     # File::Find does NOT descend a top-level argument that is not a
@@ -136,18 +170,26 @@ def _walk_target(target, wanted):
         os.chdir(start_cwd)
         return
 
-    # Perl lstats the initial (directory) target twice
-    os.lstat(target)
+    # File::Find enters the top-level directory before reading it, and
+    # omits the chdir when the target already is the current directory.
+    # A failed chdir warns and checks nothing, but still returns to the
+    # saved cwd below.
+    if target != ".":
+        try:
+            os.chdir(target)
+        except OSError as e:
+            sys.stderr.write("Can't cd to %s: %s\n" % (target, e.strerror))
+            os.chdir(start_cwd)
+            return
 
-    # Track depth for multi-level chdir back
-    final_depth = 0
-    for result in _file_find_chdir(target, "", wanted, 1):
-        if result is not None:
-            final_depth = result
+    # Perl lstats the directory again for the wanted function's -l test
+    os.lstat(".")
+
+    for _depth in _file_find_chdir(target, "", wanted, 1):
+        pass
 
     # Final chdir back to saved cwd (Perl uses absolute path from getcwd)
-    if final_depth > 0:
-        os.chdir(start_cwd)
+    os.chdir(start_cwd)
 
 
 def _file_find_chdir(target, prefix, wanted, depth):
@@ -166,28 +208,28 @@ def _file_find_chdir(target, prefix, wanted, depth):
     Yields depth values. The final depth indicates how deep we are
     after processing, so caller can do multi-level chdir.
     """
+    # Perl's $File::Find::dir: the full path from the start of the walk
+    if prefix:
+        dir_full_path = _under_target(target, prefix)
+    else:
+        dir_full_path = target
+
     # File::Find calls wanted on the root directory only (depth 1)
     if depth == 1:
-        if prefix:
-            dir_full_path = target + "/" + prefix
-        else:
-            dir_full_path = target
         wanted(".", dir_full_path, False)  # "." is not a symlink
 
     # Open and read current directory entries (Perl uses ".")
     try:
         entries = os.listdir(".")
-    except OSError:
+    except OSError as e:
+        # A directory that can be entered but not read: File::Find warns
+        # and skips it, the walk carries on with the rest of the tree.
+        sys.stderr.write("Can't opendir(%s): %s\n" % (dir_full_path, e.strerror))
         return
 
     # preprocess: stat .stow and .notstowed (Perl's -e test)
     if _path_exists(".stow") or _path_exists(".notstowed"):
-        # Perl outputs $File::Find::dir which is the full path from start
-        if prefix:
-            skip_path = target + "/" + prefix
-        else:
-            skip_path = target
-        sys.stderr.write("skipping %s\n" % skip_path)
+        sys.stderr.write("skipping %s\n" % dir_full_path)
         return
 
     # Process entries - Perl handles links immediately, defers dirs
@@ -206,7 +248,7 @@ def _file_find_chdir(target, prefix, wanted, depth):
             full_path = os.path.join(prefix, entry)
         else:
             full_path = entry
-        full_path = target + "/" + full_path
+        full_path = _under_target(target, full_path)
 
         if is_dir:
             # Dirs: just collect for later recursion
@@ -228,7 +270,18 @@ def _file_find_chdir(target, prefix, wanted, depth):
         os.lstat(subdir)  # Second lstat happens here, before chdir
         # Call wanted for dirs - generates stat for -d test
         wanted(subdir, subdir_full_path, False)
-        os.chdir(subdir)
+        try:
+            os.chdir(subdir)
+        except OSError as e:
+            # File::Find warns and skips the subtree, naming the parent
+            # directory in parentheses ('' rather than '/' for the root).
+            parent_path = dir_full_path
+            if parent_path == "/":
+                parent_path = ""
+            sys.stderr.write(
+                "Can't cd to (%s/) %s: %s\n" % (parent_path, subdir, e.strerror)
+            )
+            continue
         current_depth += 1
         if prefix:
             new_prefix = os.path.join(prefix, subdir)
@@ -258,7 +311,7 @@ def check_stow():
         Package.pop('', None)
         Package.pop('..', None)
         if Package:
-            for pkg in sorted(Package.keys()):
+            for pkg in sorted(Package.keys(), key=BYTE_ORDER_KEY):
                 print(pkg)
 
 
@@ -398,9 +451,26 @@ Options:
     sys.exit(0)
 
 
+def pass_bytes_through_streams():
+    """Report file names as the bytes they are, like Perl.
+
+    Python 3 decodes undecodable file name bytes into surrogate escapes;
+    encoding them back out is refused unless the stream asks for it, so a
+    name that is not valid in the locale's encoding would abort the run
+    instead of being printed. Under Python 2 the streams are byte streams
+    already and there is nothing to configure.
+    """
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(errors='surrogateescape')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(errors='surrogateescape')
+
+
 def main():
     """Main entry point."""
     global Wanted
+
+    pass_bytes_through_streams()
 
     if len(sys.argv) == 1:
         usage()

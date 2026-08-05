@@ -282,3 +282,380 @@ class TestChkstowGetoptLongBoth:
         assert rc == 0
         assert stdout == ""
         assert stderr == "Can't stat nosuchdir: No such file or directory\n"
+
+
+class TestChkstowTargetDirectoryBoth:
+    """The scan is rooted in the --target directory, not in the process's
+    current directory.
+
+    Every other scenario in this file runs with the process directory
+    equal to the target and passes "-t .", which cannot tell the two
+    apart. These point -t at a subdirectory whose contents differ from
+    the process directory's, so entries reported from the wrong tree —
+    or entries of the right tree gone missing — show up immediately.
+    """
+
+    def _split_trees(self, stow_env):
+        """Decoys in the process directory, the real entries under scan/."""
+        stow_env.create_package("pkg", {"file": "content"})
+        stow_env.create_target_file("alien_in_cwd", "cwd")
+        stow_env.create_target_link("dangling_in_cwd", "../stow/decoy/file")
+        stow_env.create_target_dir("scan")
+        stow_env.create_target_file("scan/alien_in_target", "target")
+        stow_env.create_target_link("scan/dangling_in_target", "nowhere")
+        stow_env.create_target_link("scan/stowed", "../../stow/pkg/file")
+
+    def test_aliens_come_from_the_target(self, stow_env):
+        self._split_trees(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-a", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Unstowed file: scan/alien_in_target\n"
+        assert stderr == ""
+
+    def test_bogus_links_come_from_the_target(self, stow_env):
+        self._split_trees(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Bogus link: scan/dangling_in_target\n"
+        assert stderr == ""
+
+    def test_list_packages_come_from_the_target(self, stow_env):
+        """The process directory's dangling link would contribute the
+        package name "nowhere"; only scan/'s links may be read."""
+        self._split_trees(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-l", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "nowhere\npkg\n"
+        assert stderr == ""
+
+    def test_absolute_target_scans_that_directory(self, stow_env):
+        self._split_trees(stow_env)
+        scan_dir = os.path.join(stow_env.target_dir, "scan")
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["-a", "-t", scan_dir])
+        assert rc == 0
+        assert stdout == f"Unstowed file: {scan_dir}/alien_in_target\n"
+
+    def test_stow_marker_probe_uses_the_target(self, stow_env):
+        """The .stow/.notstowed probe is a property of the directory being
+        scanned: a marker in the process directory must not silence the
+        scan, and a marker inside the target subtree skips that subtree
+        under its target-relative name."""
+        self._split_trees(stow_env)
+        stow_env.create_target_file(".stow", "")
+        stow_env.create_target_dir("scan/sub")
+        stow_env.create_target_file("scan/sub/.notstowed", "")
+        stow_env.create_target_file("scan/sub/alien_below_marker", "hidden")
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-a", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Unstowed file: scan/alien_in_target\n"
+        assert stderr == "skipping scan/sub\n"
+
+
+class TestChkstowUnreadableDirectoriesBoth:
+    """File::Find warns and carries on when a directory denies access.
+
+    A directory it cannot chdir into produces
+    "Can't cd to (<parent>/) <dir>: <reason>" on stderr; one it can enter
+    but not read produces "Can't opendir(<dir>): <reason>", naming the
+    directory's own path from the start of the walk. Either way the
+    subtree is skipped, the rest of the tree is still reported, and the
+    exit code stays 0.
+    """
+
+    def setup_method(self, method):
+        self.locked = []
+        if os.geteuid() == 0:
+            pytest.skip("running as root: permission bits do not block access")
+
+    def teardown_method(self, method):
+        for path in self.locked:
+            os.chmod(path, 0o755)
+
+    def _lock(self, stow_env, rel_path, mode):
+        full_path = os.path.join(stow_env.target_dir, rel_path)
+        self.locked.append(full_path)
+        os.chmod(full_path, mode)
+
+    def _tree_with_locked_dir(self, stow_env, mode):
+        stow_env.create_target_dir("scan/locked")
+        stow_env.create_target_link("scan/locked/hidden", "nowhere")
+        stow_env.create_target_file("scan/alien", "alien")
+        stow_env.create_target_link("scan/dangling", "nowhere")
+        self._lock(stow_env, "scan/locked", mode)
+
+    def test_unenterable_dir_warns_and_aliens_continue(self, stow_env):
+        self._tree_with_locked_dir(stow_env, 0o000)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-a", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Unstowed file: scan/alien\n"
+        assert stderr == "Can't cd to (scan/) locked: Permission denied\n"
+
+    def test_unenterable_dir_warns_and_badlinks_continue(self, stow_env):
+        self._tree_with_locked_dir(stow_env, 0o000)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Bogus link: scan/dangling\n"
+        assert stderr == "Can't cd to (scan/) locked: Permission denied\n"
+
+    def test_readable_but_unsearchable_dir_is_not_entered(self, stow_env):
+        """Mode 444 lists but cannot be chdir'd into, so its contents are
+        never examined."""
+        self._tree_with_locked_dir(stow_env, 0o444)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-a", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Unstowed file: scan/alien\n"
+        assert stderr == "Can't cd to (scan/) locked: Permission denied\n"
+
+    def test_nested_unenterable_dir_names_its_own_parent(self, stow_env):
+        stow_env.create_target_dir("scan/mid/locked")
+        stow_env.create_target_link("scan/mid/dangling", "nowhere")
+        self._lock(stow_env, "scan/mid/locked", 0o000)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Bogus link: scan/mid/dangling\n"
+        assert stderr == "Can't cd to (scan/mid/) locked: Permission denied\n"
+
+    def test_unenterable_target_warns_without_parentheses(self, stow_env):
+        """The top-level target is entered by name, so its failure uses
+        File::Find's plain "Can't cd to <dir>" form."""
+        stow_env.create_target_dir("scan")
+        stow_env.create_target_link("dangling_in_cwd", "nowhere")
+        self._lock(stow_env, "scan", 0o000)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "scan"])
+        assert rc == 0
+        assert stdout == ""
+        assert stderr == "Can't cd to scan: Permission denied\n"
+
+    def test_unreadable_but_searchable_dir_warns_and_aliens_continue(self, stow_env):
+        """Mode 111 is entered successfully and fails at the read, which
+        is a different warning from the one a failed chdir gives."""
+        self._tree_with_locked_dir(stow_env, 0o111)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-a", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Unstowed file: scan/alien\n"
+        assert stderr == "Can't opendir(scan/locked): Permission denied\n"
+
+    def test_unreadable_but_searchable_dir_warns_and_badlinks_continue(self, stow_env):
+        self._tree_with_locked_dir(stow_env, 0o111)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Bogus link: scan/dangling\n"
+        assert stderr == "Can't opendir(scan/locked): Permission denied\n"
+
+    def test_nested_unreadable_dir_names_its_own_path(self, stow_env):
+        """The opendir warning names the directory that could not be
+        read, not its parent as the chdir warning does."""
+        stow_env.create_target_dir("scan/mid/locked")
+        stow_env.create_target_link("scan/mid/dangling", "nowhere")
+        self._lock(stow_env, "scan/mid/locked", 0o111)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Bogus link: scan/mid/dangling\n"
+        assert stderr == "Can't opendir(scan/mid/locked): Permission denied\n"
+
+    def test_unreadable_target_warns_under_its_own_name(self, stow_env):
+        stow_env.create_target_dir("scan")
+        stow_env.create_target_link("scan/dangling", "nowhere")
+        self._lock(stow_env, "scan", 0o111)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "scan"])
+        assert rc == 0
+        assert stdout == ""
+        assert stderr == "Can't opendir(scan): Permission denied\n"
+
+    def test_unreadable_dir_in_list_mode(self, stow_env):
+        self._tree_with_locked_dir(stow_env, 0o111)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-l", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "nowhere\n"
+        assert stderr == "Can't opendir(scan/locked): Permission denied\n"
+
+
+class TestChkstowTrailingSlashBoth:
+    """File::Find drops exactly one trailing slash from its top item.
+
+    The shortened form is what prefixes every reported name and what the
+    "Can't stat" and "skipping" messages spell, while the lstat that
+    decides whether the target is a directory still sees the argument as
+    it was given.
+    """
+
+    def _tree(self, stow_env):
+        stow_env.create_target_dir("scan/sub")
+        stow_env.create_target_file("scan/alien", "alien")
+        stow_env.create_target_file("scan/sub/alien_below", "alien")
+        stow_env.create_target_link("scan/dangling", "nowhere")
+        stow_env.create_target_file("plainfile", "plain")
+        stow_env.create_target_link("linktodir", "scan")
+
+    def test_one_trailing_slash_is_dropped_from_reported_names(self, stow_env):
+        self._tree(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-a", "-t", "scan/"])
+        assert rc == 0
+        assert stdout == (
+            "Unstowed file: scan/alien\nUnstowed file: scan/sub/alien_below\n"
+        )
+        assert stderr == ""
+
+    def test_only_one_trailing_slash_is_dropped(self, stow_env):
+        """"scan//" keeps a slash, and the reported names keep it too."""
+        self._tree(stow_env)
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["-a", "-t", "scan//"])
+        assert rc == 0
+        assert stdout == (
+            "Unstowed file: scan//alien\nUnstowed file: scan//sub/alien_below\n"
+        )
+
+    def test_dot_slash_target_reads_as_dot(self, stow_env):
+        """Shortened to ".", the target is the directory the process is
+        already in, which File::Find enters by not moving at all."""
+        self._tree(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-a", "-t", "./"])
+        assert rc == 0
+        assert stdout == (
+            "Unstowed file: ./plainfile\n"
+            "Unstowed file: ./scan/alien\n"
+            "Unstowed file: ./scan/sub/alien_below\n"
+        )
+        assert stderr == ""
+
+    def test_missing_target_warning_uses_the_shortened_name(self, stow_env):
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "nosuchdir/"])
+        assert rc == 0
+        assert stdout == ""
+        assert stderr == "Can't stat nosuchdir: No such file or directory\n"
+
+    def test_file_target_with_slash_fails_the_stat(self, stow_env):
+        """The lstat sees "plainfile/" and reports ENOTDIR, but the
+        warning names the shortened path."""
+        self._tree(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "plainfile/"])
+        assert rc == 0
+        assert stdout == ""
+        assert stderr == "Can't stat plainfile: Not a directory\n"
+
+    def test_symlink_to_directory_is_descended_only_with_the_slash(self, stow_env):
+        """Without the slash the lstat sees a symlink, which File::Find
+        does not descend; with it the lstat resolves to the directory."""
+        self._tree(stow_env)
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["-a", "-t", "linktodir"])
+        assert rc == 0
+        assert stdout == ""
+        rc, stdout, _ = assert_chkstow_match(stow_env, ["-a", "-t", "linktodir/"])
+        assert rc == 0
+        assert stdout == (
+            "Unstowed file: linktodir/alien\n"
+            "Unstowed file: linktodir/sub/alien_below\n"
+        )
+
+    def test_skip_marker_message_uses_the_shortened_name(self, stow_env):
+        self._tree(stow_env)
+        stow_env.create_target_file("scan/sub/.stow", "")
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-a", "-t", "scan/"])
+        assert rc == 0
+        assert stdout == "Unstowed file: scan/alien\n"
+        assert stderr == "skipping scan/sub\n"
+
+    def test_package_list_is_unaffected_by_the_slash(self, stow_env):
+        self._tree(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-l", "-t", "scan/"])
+        assert rc == 0
+        assert stdout == "nowhere\n"
+        assert stderr == ""
+
+
+class TestChkstowNonUtf8NamesBoth:
+    """File names are bytes, and the reports pass them through unchanged.
+
+    Perl neither decodes nor validates them, so a name that is not valid
+    UTF-8 is printed as the bytes it is and sorted by byte value. The
+    names below are written as the surrogate escapes Python decodes those
+    bytes into: "\\udc80" is the byte 0x80, "\\udcff" is 0xff.
+    """
+
+    RAW_80 = "\udc80"
+    RAW_FF = "\udcff"
+
+    def _tree(self, stow_env):
+        stow_env.create_target_dir("scan")
+        for name in [self.RAW_80 + "z", "éw", "ascii", "Zupper", self.RAW_FF]:
+            stow_env.create_target_file("scan/" + name, "alien")
+        stow_env.create_target_dir("scan/" + self.RAW_80 + "dir")
+        stow_env.create_target_file(
+            "scan/" + self.RAW_80 + "dir/inner" + self.RAW_FF, "alien"
+        )
+
+    def test_aliens_report_the_raw_bytes(self, stow_env):
+        self._tree(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-a", "-t", "scan"])
+        assert rc == 0
+        assert stderr == ""
+        assert sorted(stdout.splitlines()) == sorted(
+            [
+                "Unstowed file: scan/" + self.RAW_80 + "z",
+                "Unstowed file: scan/éw",
+                "Unstowed file: scan/ascii",
+                "Unstowed file: scan/Zupper",
+                "Unstowed file: scan/" + self.RAW_FF,
+                "Unstowed file: scan/" + self.RAW_80 + "dir/inner" + self.RAW_FF,
+            ]
+        )
+
+    def test_bogus_links_report_the_raw_bytes(self, stow_env):
+        stow_env.create_target_dir("scan")
+        stow_env.create_target_link("scan/" + self.RAW_80 + "link", "nowhere")
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-b", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Bogus link: scan/" + self.RAW_80 + "link\n"
+        assert stderr == ""
+
+    def test_package_list_sorts_by_byte_value(self, stow_env):
+        """Perl's sort compares bytes: 0x80 comes before the 0xc3 that
+        starts the UTF-8 encoding of "é", which comparing decoded code
+        points would reverse. Case is likewise a byte comparison, so
+        "Mpkg" precedes "mpkg"."""
+        stow_env.create_target_dir("scan")
+        for name, pkg in [
+            ("l1", self.RAW_80 + "z"),
+            ("l2", "éw"),
+            ("l3", "Mpkg"),
+            ("l4", "mpkg"),
+            ("l5", self.RAW_FF + "q"),
+        ]:
+            stow_env.create_target_link("scan/" + name, "../stow/" + pkg + "/file")
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-l", "-t", "scan"])
+        assert rc == 0
+        assert stdout == (
+            "Mpkg\nmpkg\n" + self.RAW_80 + "z\néw\n" + self.RAW_FF + "q\n"
+        )
+        assert stderr == ""
+
+    def test_warnings_carry_the_raw_bytes(self, stow_env):
+        """The skip message and the "Can't stat" warning go through the
+        same byte-transparent path as the reports."""
+        stow_env.create_target_dir("scan/" + self.RAW_80 + "dir")
+        stow_env.create_target_file("scan/" + self.RAW_80 + "dir/.stow", "")
+        stow_env.create_target_file("scan/alien", "alien")
+        rc, stdout, stderr = assert_chkstow_match(stow_env, ["-a", "-t", "scan"])
+        assert rc == 0
+        assert stdout == "Unstowed file: scan/alien\n"
+        assert stderr == "skipping scan/" + self.RAW_80 + "dir\n"
+
+        rc, stdout, stderr = assert_chkstow_match(
+            stow_env, ["-a", "-t", self.RAW_80 + "nosuch"]
+        )
+        assert rc == 0
+        assert stdout == ""
+        assert stderr == (
+            "Can't stat " + self.RAW_80 + "nosuch: No such file or directory\n"
+        )
+
+    def test_raw_bytes_survive_a_non_utf8_locale(self, stow_env):
+        """Neither implementation interprets the names, so the C locale
+        changes nothing about what is printed."""
+        self._tree(stow_env)
+        rc, stdout, stderr = assert_chkstow_match(
+            stow_env, ["-a", "-t", "scan"], env={"LC_ALL": "C", "LANG": "C"}
+        )
+        assert rc == 0
+        assert stderr == ""
+        assert ("Unstowed file: scan/" + self.RAW_80 + "z") in stdout.splitlines()

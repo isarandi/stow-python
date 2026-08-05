@@ -201,7 +201,12 @@ class StowTestEnv:
         return proc.returncode, stdout_str, stderr_str
 
     def run_perl_chkstow(self, args, env=None):
-        """Run Perl chkstow and return (returncode, stdout, stderr)."""
+        """Run Perl chkstow and return (returncode, stdout, stderr).
+
+        chkstow reports file names, which are bytes; the surrogate-escape
+        decoding keeps names that are not valid UTF-8 distinguishable, so
+        the oracle comparison stays byte-exact for them.
+        """
         if PERL_CHKSTOW is None:
             pytest.skip("Perl chkstow not found")
 
@@ -219,8 +224,8 @@ class StowTestEnv:
             env=run_env,
         )
         stdout, stderr = proc.communicate()
-        stdout_str = stdout.decode("utf-8", errors="replace")
-        stderr_str = stderr.decode("utf-8", errors="replace")
+        stdout_str = stdout.decode("utf-8", errors="surrogateescape")
+        stderr_str = stderr.decode("utf-8", errors="surrogateescape")
         return proc.returncode, stdout_str, stderr_str
 
     def run_python_chkstow(self, args, env=None):
@@ -239,14 +244,47 @@ class StowTestEnv:
             env=run_env,
         )
         stdout, stderr = proc.communicate()
-        stdout_str = stdout.decode("utf-8", errors="replace")
-        stderr_str = stderr.decode("utf-8", errors="replace")
+        stdout_str = stdout.decode("utf-8", errors="surrogateescape")
+        stderr_str = stderr.decode("utf-8", errors="surrogateescape")
         return proc.returncode, stdout_str, stderr_str
 
     def reset_target(self):
         """Reset target directory to empty state."""
         shutil.rmtree(self.target_dir)
         os.makedirs(self.target_dir)
+
+    def _stow_dir_paths(self):
+        """Every path currently under the stow directory, deepest first."""
+        paths = []
+        for root, dirs, files in os.walk(self.stow_dir, followlinks=False):
+            for name in dirs + files:
+                paths.append(os.path.join(root, name))
+        paths.sort(key=len, reverse=True)
+        return paths
+
+    def snapshot_stow_dir(self):
+        """
+        Remember which paths exist under the stow directory.
+
+        --adopt moves files out of the target and into the stow
+        directory, so a run can leave paths behind which the next run
+        would then find already in place. Recording them here lets
+        restore_stow_dir() put the two implementations on equal footing.
+        """
+        self._stow_dir_snapshot = set(self._stow_dir_paths())
+
+    def restore_stow_dir(self):
+        """Delete stow directory paths created since snapshot_stow_dir()."""
+        snapshot = getattr(self, "_stow_dir_snapshot", None)
+        if snapshot is None:
+            return
+        for path in self._stow_dir_paths():
+            if path in snapshot:
+                continue
+            if os.path.islink(path) or not os.path.isdir(path):
+                os.unlink(path)
+            else:
+                os.rmdir(path)
 
 
 @pytest.fixture
@@ -288,7 +326,7 @@ def normalize_stow_output(text):
 
 def normalize_newline_warnings(text):
     """
-    Normalize Perl's newline-in-filename warnings for comparison.
+    Normalize Perl's runtime warnings for comparison.
 
     Perl appends " at FILE line N." (and possibly ", <FH> line N") to these
     warnings; the Python implementation emits the same warning text but
@@ -305,10 +343,20 @@ def normalize_newline_warnings(text):
         text,
     )
 
-    # File::Find's "Can't stat" warning ends in a newline BEFORE the
-    # location, so the suffix lands on its own line.
+    # Perl's warning for interpolating an undefined value, raised when
+    # expand_tilde() substitutes the home directory of an unknown user.
     text = re.sub(
-        r"(Can't stat [^\n]*)\n at [^\n]+ line \d+\.",
+        r"(Use of uninitialized value in substitution iterator)"
+        r" at [^\n]+ line \d+(?:, <[^>]+> line \d+)?\.",
+        r"\1",
+        text,
+    )
+
+    # File::Find's "Can't stat", "Can't cd to" and "Can't opendir"
+    # warnings end in a newline BEFORE the location, so the suffix lands
+    # on its own line.
+    text = re.sub(
+        r"(Can't (?:stat|cd to|opendir)[^\n]*)\n at [^\n]+ line \d+\.",
         r"\1",
         text,
     )
@@ -334,6 +382,7 @@ def assert_stow_match(stow_env, args, setup_func=None, env=None, ignore_stderr_w
         ignore_stderr_whitespace: if True, ignore whitespace differences in stderr
     """
     # Run Perl stow
+    stow_env.snapshot_stow_dir()
     stow_env.reset_target()
     if setup_func:
         setup_func()
@@ -341,11 +390,13 @@ def assert_stow_match(stow_env, args, setup_func=None, env=None, ignore_stderr_w
     perl_state = stow_env.get_filesystem_state()
 
     # Reset and run Python stow
+    stow_env.restore_stow_dir()
     stow_env.reset_target()
     if setup_func:
         setup_func()
     python_rc, python_stdout, python_stderr = stow_env.run_python_stow(args, env)
     python_state = stow_env.get_filesystem_state()
+    stow_env.restore_stow_dir()
 
     # Normalize Python output to match Perl branding for comparison
     python_stdout = normalize_stow_output(python_stdout)
@@ -945,6 +996,7 @@ def assert_stow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
     tmpdir = stow_env.tmpdir
 
     # Run Perl stow with strace
+    stow_env.snapshot_stow_dir()
     stow_env.reset_target()
     if setup_func:
         setup_func()
@@ -967,6 +1019,7 @@ def assert_stow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
     perl_ops = parse_strace_output(perl_strace_file, tmpdir=tmpdir)
 
     # Run Python stow with strace
+    stow_env.restore_stow_dir()
     stow_env.reset_target()
     if setup_func:
         setup_func()
@@ -985,6 +1038,7 @@ def assert_stow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
     )
     python_state = stow_env.get_filesystem_state()
     python_ops = parse_strace_output(python_strace_file, tmpdir=tmpdir)
+    stow_env.restore_stow_dir()
 
     # Clean up strace files
     try:
