@@ -27,6 +27,8 @@ Based on Perl t/rc_options.t
 import os
 
 from conftest import (
+    assert_stow_match,
+    assert_stow_match_with_fs_ops,
     check_link,
     run_both_tests,
 )
@@ -199,4 +201,128 @@ class TestRcOptionsBoth:
             check,
             check_on_simulate=False,
             compare_fs_ops=False,
+        )
+
+    def test_stowrc_with_non_utf8_bytes(self, stow_env):
+        """A .stowrc holding non-UTF-8 bytes is read like Perl reads bytes."""
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        with open(os.path.join(stow_env.tmpdir, ".stowrc"), "wb") as f:
+            f.write(b"-d " + stow_env.stow_dir.encode() + b"\n")
+            f.write(b"--target=" + stow_env.target_dir.encode() + b"\n")
+            f.write(b"--ignore=\xff\n")
+
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "bin", "../stow/pkg/bin")
+
+        run_both_tests(
+            stow_env,
+            ["pkg"],
+            setup,
+            check,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+    def test_stowrc_brace_without_variable_name_stays_literal(self, stow_env):
+        """A brace group that is not a bare variable name is left as it is."""
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        with open(os.path.join(stow_env.tmpdir, ".stowrc"), "w") as f:
+            f.write(f"-d {stow_env.stow_dir}\n")
+            f.write("--target=${TQZ-x}\n")
+
+        def setup():
+            pass
+
+        # ${TQZ-x} is not a variable reference, so it survives expansion and
+        # is reported verbatim as the invalid directory it is
+        run_both_tests(
+            stow_env,
+            ["pkg"],
+            setup,
+            check_func=None,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+    def test_home_of_zero_falls_through_to_logdir(self, stow_env):
+        """A HOME of "0" is false, so ~ expands from LOGDIR instead.
+
+        Perl picks the home directory with
+        $ENV{HOME} || $ENV{LOGDIR} || (getpwuid($<))[7].
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        with open(os.path.join(stow_env.stow_dir, ".stowrc"), "w") as f:
+            f.write("--target ~\n")
+
+        def setup():
+            pass
+
+        _rc, _stdout, _stderr, state = assert_stow_match(
+            stow_env,
+            ["pkg"],
+            setup,
+            env={"HOME": "0", "LOGDIR": stow_env.target_dir},
+        )
+        assert state["bin"] == ("link", "../stow/pkg/bin")
+
+    def test_tilde_user_named_zero_takes_bare_tilde_branch(self, stow_env):
+        """~0 expands from HOME, because the captured name "0" is false.
+
+        Perl chooses between (getpwnam($1))[7] and the HOME chain with
+        "$1 ? ... : ...", so a user name of "0" never reaches getpwnam.
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        with open(os.path.join(stow_env.stow_dir, ".stowrc"), "w") as f:
+            f.write("--target ~0\n")
+
+        def setup():
+            pass
+
+        _rc, _stdout, _stderr, state = assert_stow_match(
+            stow_env, ["pkg"], setup, env={"HOME": stow_env.target_dir}
+        )
+        assert state["bin"] == ("link", "../stow/pkg/bin")
+
+    def test_empty_home_still_probes_root_stowrc(self, stow_env):
+        """An empty but set HOME is still interpolated into "$HOME/.stowrc".
+
+        Perl guards that probe with defined($ENV{HOME}), so it looks for
+        "/.stowrc" rather than skipping the home config entirely. Only the
+        syscall trace shows it.
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+
+        def setup():
+            pass
+
+        assert_stow_match_with_fs_ops(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg"],
+            setup,
+            env={"HOME": ""},
+        )
+
+    def test_tilde_unknown_user_expands_to_empty(self, stow_env):
+        """~nosuchuser expands to nothing, after a warning.
+
+        Perl's getpwnam returns the empty list for an unknown user, so the
+        substitution interpolates an undefined value.
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        with open(os.path.join(stow_env.stow_dir, ".stowrc"), "w") as f:
+            f.write("--target ~nosuchuser-xyzzy/t\n")
+
+        def setup():
+            pass
+
+        rc, _stdout, stderr, _state = assert_stow_match(stow_env, ["pkg"], setup)
+        assert rc == 1
+        assert stderr.startswith(
+            "Use of uninitialized value in substitution iterator\n"
+            "stow: --target value '/t' is not a valid directory\n"
         )

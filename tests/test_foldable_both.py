@@ -132,3 +132,30 @@ class TestFoldableBoth:
             check,
             compare_fs_ops=True,
         )
+
+    def test_package_named_zero_never_folds(self, stow_env):
+        """A tree owned by package "0" is never folded back up.
+
+        foldable() only folds when link_owned_by_package() returns a true
+        value, and Perl reads the package name "0" as false.
+        """
+        stow_env.create_package("0", {"bin5/file5a": "content a"})
+        stow_env.create_package("pkg5b", {"bin5/file5b": "content b"})
+
+        def setup():
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "0"])
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg5b"])
+
+        def check(env):
+            # Still a real directory holding one link, not folded to a link
+            check_dir(env, "bin5")
+            check_link(env, "bin5/file5a", "../../stow/0/bin5/file5a")
+            check_not_exists(env, "bin5/file5b")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "-D", "pkg5b"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )

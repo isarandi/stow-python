@@ -53,6 +53,12 @@ import traceback
 VERSION = '2.4.1'
 ProgramName = 'stow'
 
+# stow_contents()/stow_node() and unstow_contents()/unstow_node() are mutually
+# recursive and use a few frames per directory level, where Perl's recursion is
+# limited only by memory. The default limit of 1000 aborts on trees far shallower
+# than the filesystem allows, so raise it well past any depth PATH_MAX permits.
+sys.setrecursionlimit(20000)
+
 
 ##############################################################################
 #
@@ -70,6 +76,16 @@ _last_errno = 0
 # General Utilities: nothing stow specific here.
 #
 #############################################################################
+
+
+class DieError(Exception):
+    """
+    A die() carrying a message of its own.
+
+    Callers may catch it, as Perl code can trap a die() with eval; when
+    nothing does, main() prints the message with no "stow: ERROR:" prefix
+    and exits 255, the exit code of an uncaught die().
+    """
 
 
 def error(format_str, *args):
@@ -94,6 +110,105 @@ def error(format_str, *args):
     sys.exit(exit_code)
 
 
+def perl_true(value):
+    """
+    Perl's truth test for a scalar.
+
+    Perl treats the empty string and the one-character string "0" as
+    false, so a package, path or link destination which happens to be
+    named "0" fails every boolean test Perl makes on it.
+    """
+    if not value:
+        return False
+    return value != '0'
+
+
+def warn_unsuccessful(path, syscall):
+    """
+    Outputs Perl's warning for a stat/lstat which failed on a newline path.
+
+    Perl's stat and lstat builtins warn "Unsuccessful (l)stat on filename
+    containing newline" when the syscall fails and the path ENDS with a
+    newline (the you-forgot-to-chomp heuristic: a newline in the middle
+    is not enough, and a successful call never warns). Every file test
+    operator (-e, -d, -l) is a stat or an lstat, so all stat-family calls
+    in this file go through the wrappers below; one that doesn't makes
+    the number of warnings drift away from Perl's.
+
+    Perl appends " at FILE line N." to the warning; the location of the
+    corresponding call here would be a different file and line either
+    way, so only the message itself is reproduced.
+    """
+    if path.endswith('\n'):
+        sys.stderr.write("Unsuccessful %s on filename containing newline\n" % syscall)
+
+
+def stat_path(path):
+    """os.stat() with Perl's warning for a failed stat on a newline path."""
+    try:
+        return os.stat(path)
+    except (OSError, ValueError):
+        warn_unsuccessful(path, 'stat')
+        raise
+
+
+def lstat_path(path):
+    """os.lstat() with Perl's warning for a failed lstat on a newline path."""
+    try:
+        return os.lstat(path)
+    except (OSError, ValueError):
+        warn_unsuccessful(path, 'lstat')
+        raise
+
+
+def note_failed_syscall(exception):
+    """
+    Record the errno of a failed syscall, as Perl's $! does.
+
+    A successful syscall leaves $! alone, so only failures are recorded.
+    """
+    global _last_errno
+    if getattr(exception, 'errno', None):
+        _last_errno = exception.errno
+
+
+def errno_string():
+    """Perl's "$!" in string context: the message for the current errno."""
+    if _last_errno:
+        return os.strerror(_last_errno)
+    return ''
+
+
+def path_exists(path):
+    """Perl's -e test: a single stat, which follows symlinks."""
+    try:
+        stat_path(path)
+    except (OSError, ValueError) as e:
+        note_failed_syscall(e)
+        return False
+    return True
+
+
+def path_is_dir(path):
+    """Perl's -d test: a single stat, which follows symlinks."""
+    try:
+        stat_result = stat_path(path)
+    except (OSError, ValueError) as e:
+        note_failed_syscall(e)
+        return False
+    return stat.S_ISDIR(stat_result.st_mode)
+
+
+def path_is_link(path):
+    """Perl's -l test: a single lstat."""
+    try:
+        stat_result = lstat_path(path)
+    except (OSError, ValueError) as e:
+        note_failed_syscall(e)
+        return False
+    return stat.S_ISLNK(stat_result.st_mode)
+
+
 def is_a_directory(path):
     """
     Check if path is a directory, setting errno like Perl's -d operator.
@@ -103,7 +218,7 @@ def is_a_directory(path):
     """
     global _last_errno
     try:
-        stat_result = os.stat(path)
+        stat_result = stat_path(path)
         if stat.S_ISDIR(stat_result.st_mode):
             _last_errno = 0
             return True
@@ -246,25 +361,25 @@ def _canonpath(path):
     if not path:
         return path
 
-    # Remove duplicate slashes
-    path = re.sub(r'/+', '/', path)
+    # xx////xx  -> xx/xx
+    path = re.sub(r'/{2,}', '/', path)
 
-    # Remove trailing slash (unless it's just "/")
-    if len(path) > 1 and path.endswith('/'):
-        path = path[:-1]
+    # xx/././xx -> xx/xx
+    path = re.sub(r'(?:/\.)+(?:/|\Z)', '/', path)
 
-    # Remove leading ./ (but not just ".")
-    path = re.sub(r'^\./', '', path)
+    # ./xx      -> xx
+    if path != './':
+        path = re.sub(r'^(?:\./)+', '', path, count=1)
 
-    # Remove /. at the end
-    path = re.sub(r'/\.$', '', path)
+    # /../../xx -> /xx
+    path = re.sub(r'^/(?:\.\./)+', '/', path, count=1)
 
-    # Remove /./ in the middle
-    path = re.sub(r'/\./', '/', path)
+    # /..       -> /
+    path = re.sub(r'^/\.\.$', '/', path, count=1)
 
-    # If we ended up with empty string, return '.'
-    if not path:
-        path = '.'
+    # xx/       -> xx
+    if path != '/':
+        path = re.sub(r'/\Z', '', path, count=1)
 
     return path
 
@@ -300,6 +415,10 @@ def move_like_perl(src, dst):
     still have succeeded, detectable by the source being gone and the
     destination having the expected size). Falls back to copy+delete for
     cross-filesystem moves.
+
+    File::Copy opens with "no warnings 'newline'", so none of these stats
+    produce the newline warning that stow's own file tests do; they go
+    straight to os, bypassing the wrappers.
     """
     # Moving into a directory (also produces Perl's -d stat syscall)
     if os.path.isdir(dst) and not os.path.isdir(src):
@@ -391,6 +510,46 @@ def unadjust_dotfile(target_node):
     if target_node.startswith('.'):
         return 'dot-' + target_node[1:]
     return target_node
+
+
+# A global inline flag group, such as "(?i)", at the start of a pattern.
+LEADING_INLINE_FLAGS_RE = re.compile(r'\A\(\?([a-zA-Z]+(?:-[a-zA-Z]+)?)\)')
+
+
+def join_alternation(patterns):
+    """
+    Joins user patterns into one alternation, keeping Perl's flag scope.
+
+    Perl applies an inline flag group such as "(?i)" to the remainder of
+    the group it sits in, so in "a|(?i)b|c" the flag covers c as well.
+    Python only accepts a global flag group at the very start of a
+    pattern, so the flag and everything following it within the
+    alternation is rewritten as a scoped group: "a|(?i:b|c)".
+
+    N.B. Perl walks the ignore list in hash order, which is randomised
+    per process, so which patterns trail a flagged one - and therefore
+    pick up its flag - varies between Perl runs. The order patterns were
+    read in is used here.
+    """
+    combined = ''
+    for index in range(len(patterns) - 1, -1, -1):
+        pattern = patterns[index]
+        match = LEADING_INLINE_FLAGS_RE.match(pattern)
+        if match:
+            rest = pattern[match.end():]
+            if combined:
+                rest = rest + '|' + combined
+            combined = '(?%s:%s)' % (match.group(1), rest)
+        elif combined:
+            combined = pattern + '|' + combined
+        else:
+            combined = pattern
+    return combined
+
+
+def scope_inline_flags(pattern):
+    """Scopes a leading global inline flag group: "(?i)x" becomes "(?i:x)"."""
+    return join_alternation([pattern])
 
 
 ##############################################################################
@@ -656,6 +815,8 @@ class Stow(object):
     # stow_node() and stow_contents() are mutually recursive.
     #=========================================================================
     def stow_contents(self, stow_path, package, pkg_subdir, target_subdir):
+        global _last_errno
+
         if self.should_skip_target(pkg_subdir):
             return
 
@@ -663,11 +824,13 @@ class Stow(object):
         msg = "Stowing contents of %s / %s / %s (cwd=%s)" % (
             stow_path, package, pkg_subdir, cwd
         )
-        # Replace $HOME with ~ for readability
+        # Replace $HOME with ~ for readability, but only where $HOME is
+        # followed by a slash or ends the message (Perl's s!$HOME(/|$)!~$1!g)
         home = os.environ.get('HOME', '')
         if home:
             msg = msg.replace(home + '/', '~/')
-            msg = msg.replace(home, '~')
+            if msg.endswith(home):
+                msg = msg[:-len(home)] + '~'
         debug(3, 0, msg)
         debug(4, 1, "target subdir is %s" % target_subdir)
 
@@ -683,7 +846,9 @@ class Stow(object):
         try:
             listing = os.listdir(pkg_path_from_cwd)
         except OSError as e:
-            error("cannot read directory: %s (%s)", pkg_path_from_cwd, e)
+            # A failed opendir leaves errno set, which die() uses as exit code
+            _last_errno = e.errno
+            error("cannot read directory: %s (%s)", pkg_path_from_cwd, e.strerror)
 
         for node in sorted(listing):
             if node == '.' or node == '..':
@@ -726,7 +891,7 @@ class Stow(object):
         pkg_path_from_cwd = join_paths(stow_path, package, pkg_subpath)
 
         # Don't try to stow absolute symlinks (they can't be unstowed)
-        if os.path.islink(pkg_path_from_cwd):
+        if path_is_link(pkg_path_from_cwd):
             link_dest = self.read_a_link(pkg_path_from_cwd)
             if link_dest.startswith('/'):
                 self.conflict(
@@ -750,7 +915,7 @@ class Stow(object):
         if self.is_a_link(target_subpath):
             # Where is the link pointing?
             existing_link_dest = self.read_a_link(target_subpath)
-            if not existing_link_dest:
+            if not perl_true(existing_link_dest):
                 error("Could not read link: %s", target_subpath)
             debug(4, 1, "Evaluate existing link: %s => %s" % (target_subpath, existing_link_dest))
 
@@ -758,7 +923,7 @@ class Stow(object):
             existing_pkg_path_from_cwd, existing_stow_path, existing_package = \
                 self.find_stowed_path(target_subpath, existing_link_dest)
 
-            if not existing_pkg_path_from_cwd:
+            if not perl_true(existing_pkg_path_from_cwd):
                 self.conflict(
                     'stow',
                     package,
@@ -818,7 +983,7 @@ class Stow(object):
         elif self.is_a_node(target_subpath):
             debug(4, 1, "Evaluate existing node: %s" % target_subpath)
             if self.is_a_dir(target_subpath):
-                if not os.path.isdir(pkg_path_from_cwd):
+                if not path_is_dir(pkg_path_from_cwd):
                     # FIXME: why wasn't this ever needed before?
                     self.conflict(
                         'stow',
@@ -838,7 +1003,7 @@ class Stow(object):
                 # If we're here, $target_subpath is not a current or
                 # planned directory.
                 if self.adopt:
-                    if os.path.isdir(pkg_path_from_cwd):
+                    if path_is_dir(pkg_path_from_cwd):
                         self.conflict(
                             'stow',
                             package,
@@ -858,8 +1023,8 @@ class Stow(object):
                         % (pkg_path_from_cwd, target_subpath)
                     )
 
-        elif (self.no_folding and os.path.isdir(pkg_path_from_cwd)
-              and not os.path.islink(pkg_path_from_cwd)):
+        elif (self.no_folding and path_is_dir(pkg_path_from_cwd)
+              and not path_is_link(pkg_path_from_cwd)):
             self.do_mkdir(target_subpath)
             self.stow_contents(
                 self.stow_path,
@@ -894,7 +1059,7 @@ class Stow(object):
             return True
 
         nonstow_file = join_paths(target, ".nonstow")
-        if os.path.exists(nonstow_file):
+        if path_exists(nonstow_file):
             sys.stderr.write("WARNING: skipping protected directory %s\n" % target)
             return True
 
@@ -904,7 +1069,7 @@ class Stow(object):
     def marked_stow_dir(self, dir_path):
         """Check if directory contains .stow marker file."""
         stow_file = join_paths(dir_path, ".stow")
-        if os.path.exists(stow_file):
+        if path_exists(stow_file):
             debug(5, 5, "> %s contained .stow" % dir_path)
             return True
         return False
@@ -918,6 +1083,8 @@ class Stow(object):
     # Here we traverse the package tree, rather than the target tree.
     #=========================================================================
     def unstow_contents(self, package, pkg_subdir, target_subdir):
+        global _last_errno
+
         if self.should_skip_target(target_subdir):
             return
 
@@ -941,13 +1108,13 @@ class Stow(object):
             # In compat mode we traverse the target tree not the source tree,
             # so we're unstowing the contents of /target/foo, there's no
             # guarantee that the corresponding /stow/mypkg/foo exists.
-            if not os.path.isdir(target_subdir):
+            if not path_is_dir(target_subdir):
                 error("unstow_contents() in compat mode called with non-directory target: %s",
                       target_subdir)
         else:
             # We traverse the package installation image tree not the
             # target tree, so $pkg_path_from_cwd must exist.
-            if not os.path.isdir(pkg_path_from_cwd):
+            if not path_is_dir(pkg_path_from_cwd):
                 error("unstow_contents() called with non-directory path: %s",
                       pkg_path_from_cwd)
 
@@ -962,7 +1129,9 @@ class Stow(object):
         try:
             listing = os.listdir(dir_to_read)
         except OSError as e:
-            error("cannot read directory: %s (%s)", dir_to_read, e)
+            # A failed opendir leaves errno set, which die() uses as exit code
+            _last_errno = e.errno
+            error("cannot read directory: %s (%s)", dir_to_read, e.strerror)
 
         for node in sorted(listing):
             if node == '.' or node == '..':
@@ -1001,7 +1170,7 @@ class Stow(object):
                 target_node_path
             )
 
-        if not self.compat and os.path.isdir(target_subdir):
+        if not self.compat and path_is_dir(target_subdir):
             self.cleanup_invalid_links(target_subdir)
 
     #=========================================================================
@@ -1018,14 +1187,14 @@ class Stow(object):
         # Does the target exist?
         if self.is_a_link(target_subpath):
             self.unstow_link_node(package, pkg_subpath, target_subpath)
-        elif os.path.isdir(target_subpath):
+        elif path_is_dir(target_subpath):
             self.unstow_contents(package, pkg_subpath, target_subpath)
 
             # This action may have made the parent directory foldable
             parent_in_pkg = self.foldable(target_subpath)
-            if parent_in_pkg:
+            if perl_true(parent_in_pkg):
                 self.fold_tree(target_subpath, parent_in_pkg)
-        elif os.path.exists(target_subpath):
+        elif path_exists(target_subpath):
             debug(2, 1, "%s doesn't need to be unstowed" % target_subpath)
         else:
             debug(2, 1, "%s did not exist to be unstowed" % target_subpath)
@@ -1035,7 +1204,7 @@ class Stow(object):
 
         # Where is the link pointing?
         link_dest = self.read_a_link(target_subpath)
-        if not link_dest:
+        if not perl_true(link_dest):
             error("Could not read link: %s", target_subpath)
 
         if link_dest.startswith('/'):
@@ -1047,7 +1216,7 @@ class Stow(object):
         existing_pkg_path_from_cwd, existing_stow_path, existing_package = \
             self.find_stowed_path(target_subpath, link_dest)
 
-        if not existing_pkg_path_from_cwd:
+        if not perl_true(existing_pkg_path_from_cwd):
             # The user is unstowing the package, so they don't want links to it.
             # Therefore we should allow them to have a link pointing elsewhere
             # which would conflict with the package if they were stowing it.
@@ -1057,7 +1226,7 @@ class Stow(object):
         pkg_path_from_cwd = join_paths(self.stow_path, package, pkg_subpath)
 
         # Does the existing $target_subpath actually point to anything?
-        if os.path.exists(existing_pkg_path_from_cwd):
+        if path_exists(existing_pkg_path_from_cwd):
             if existing_pkg_path_from_cwd == pkg_path_from_cwd:
                 # It points to the package we're unstowing, so unstow the link.
                 self.do_unlink(target_subpath)
@@ -1161,7 +1330,7 @@ class Stow(object):
         segments = [s for s in segments if s]  # Remove empty segments
 
         for last_segment in range(len(segments)):
-            path_so_far = '/'.join(segments[:last_segment + 1])
+            path_so_far = join_paths(*segments[:last_segment + 1])
             debug(5, 5, "is %s marked stow dir?" % path_so_far)
             if self.marked_stow_dir(path_so_far):
                 if last_segment == len(segments) - 1:
@@ -1183,16 +1352,20 @@ class Stow(object):
     # are both orphaned and owned by Stow.
     #=========================================================================
     def cleanup_invalid_links(self, dir_path):
+        global _last_errno
+
         cwd = os.getcwd()
         debug(2, 0, "Cleaning up any invalid links in %s (pwd=%s)" % (dir_path, cwd))
 
-        if not os.path.isdir(dir_path):
+        if not path_is_dir(dir_path):
             internal_error("cleanup_invalid_links() called with a non-directory: %s" % dir_path)
 
         try:
             listing = os.listdir(dir_path)
         except OSError as e:
-            error("cannot read directory: %s (%s)", dir_path, e)
+            # A failed opendir leaves errno set, which die() uses as exit code
+            _last_errno = e.errno
+            error("cannot read directory: %s (%s)", dir_path, e.strerror)
 
         for node in sorted(listing):
             if node == '.' or node == '..':
@@ -1200,7 +1373,7 @@ class Stow(object):
 
             node_path = join_paths(dir_path, node)
 
-            if not os.path.islink(node_path):
+            if not path_is_link(node_path):
                 continue
 
             debug(4, 1, "Checking validity of link %s" % node_path)
@@ -1218,13 +1391,16 @@ class Stow(object):
             # (don't use read_a_link() here)
             try:
                 link_dest = os.readlink(node_path)
-            except OSError:
+            except OSError as e:
+                note_failed_syscall(e)
+                link_dest = ''
+            if not perl_true(link_dest):
                 error("Could not read link %s", node_path)
 
             target_subpath = join_paths(dir_path, link_dest)
             debug(4, 2, "join %s %s" % (dir_path, link_dest))
 
-            if os.path.exists(target_subpath):
+            if path_exists(target_subpath):
                 debug(4, 2, "Link target %s exists at %s; skipping clean up"
                       % (link_dest, target_subpath))
                 continue
@@ -1235,7 +1411,7 @@ class Stow(object):
                   "Checking whether valid link %s -> %s is owned by stow" % (node_path, link_dest))
 
             owner = self.link_owned_by_package(node_path, link_dest)
-            if owner:
+            if perl_true(owner):
                 # owned by stow
                 debug(2, 0, "--- removing link owned by %s: %s => %s" % (
                     owner, node_path, join_paths(dir_path, link_dest)
@@ -1285,7 +1461,7 @@ class Stow(object):
 
             # Where is the link pointing?
             link_dest = self.read_a_link(target_node_path)
-            if not link_dest:
+            if not perl_true(link_dest):
                 error("Could not read link %s", target_node_path)
 
             new_parent = parent(link_dest)
@@ -1297,7 +1473,7 @@ class Stow(object):
                       % (target_subdir, parent_in_pkg, new_parent))
                 return ''
 
-        if not parent_in_pkg:
+        if not perl_true(parent_in_pkg):
             debug(3, 3, "Not foldable because %s contains no links" % target_subdir)
             return ''
 
@@ -1310,7 +1486,7 @@ class Stow(object):
             parent_in_pkg = parent_in_pkg[3:]
 
         # If the resulting path is owned by stow, we can fold it
-        if self.link_owned_by_package(target_subdir, parent_in_pkg):
+        if perl_true(self.link_owned_by_package(target_subdir, parent_in_pkg)):
             debug(3, 3, "%s is foldable" % target_subdir)
             return parent_in_pkg
         else:
@@ -1455,11 +1631,13 @@ class Stow(object):
         #      compile_ignore_regexps(), so that they always stay within their stow packages.
 
         local_stow_ignore = join_paths(dir_path, LOCAL_IGNORE_FILE)
+        # join_paths drops an unset $HOME, leaving the bare file name, which
+        # is then looked up relative to the current (target) directory
         home = os.environ.get('HOME', '')
-        global_stow_ignore = join_paths(home, GLOBAL_IGNORE_FILE) if home else ''
+        global_stow_ignore = join_paths(home, GLOBAL_IGNORE_FILE)
 
         for file_path in (local_stow_ignore, global_stow_ignore):
-            if file_path and os.path.exists(file_path):
+            if path_exists(file_path):
                 debug(5, 1, "Using ignore file: %s" % file_path)
                 return self.get_ignore_regexps_from_file(file_path)
             else:
@@ -1475,10 +1653,15 @@ class Stow(object):
             return _ignore_file_regexps[file_path]
 
         try:
-            with open(file_path, 'r') as f:
+            # newline='\n' splits records exactly like Perl's <REGEXPS> (on
+            # newline only, so a bare CR stays inside its pattern), and
+            # surrogateescape carries bytes that are not valid UTF-8 through
+            # unchanged, matching Perl's encoding-free read
+            with io.open(file_path, 'r', encoding='utf-8',
+                         errors='surrogateescape', newline='\n') as f:
                 regexps = self.get_ignore_regexps_from_fh(f)
         except IOError as e:
-            debug(4, 2, "Failed to open %s: %s" % (file_path, e))
+            debug(4, 2, "Failed to open %s: %s" % (file_path, e.strerror))
             return (None, None)
 
         _ignore_file_regexps[file_path] = regexps
@@ -1542,11 +1725,11 @@ class Stow(object):
         path_regexp = None
 
         if segment_regexps:
-            combined = '|'.join(segment_regexps)
+            combined = join_alternation(segment_regexps)
             segment_regexp = self.compile_regexp('^(%s)$' % combined)
 
         if path_regexps:
-            combined = '|'.join(path_regexps)
+            combined = join_alternation(path_regexps)
             path_regexp = self.compile_regexp('(^|/)(%s)(/|$)' % combined)
 
         return (path_regexp, segment_regexp)
@@ -1556,8 +1739,7 @@ class Stow(object):
         try:
             return re.compile(regexp)
         except re.error as e:
-            # Perl uses die() which raises an exception that can be caught
-            raise RuntimeError("Failed to compile regexp: %s" % e)
+            raise DieError("Failed to compile regexp: %s" % e)
 
     def get_default_global_ignore_regexps(self):
         """
@@ -1824,7 +2006,7 @@ _darcs
                 debug(4, 2, "is_a_link(%s): returning 1 (create action found)" % target_path)
                 return True
 
-        if os.path.islink(target_path):
+        if path_is_link(target_path):
             # Check if any of its parent are links scheduled for removal
             # (need this for edge case during unfolding)
             debug(4, 2, "is_a_link(%s): is a real link" % target_path)
@@ -1854,7 +2036,7 @@ _darcs
         if self.parent_link_scheduled_for_removal(target_path):
             return False
 
-        if os.path.isdir(target_path):
+        if path_is_dir(target_path):
             debug(4, 1, "is_a_dir(%s): real dir" % target_path)
             return True
 
@@ -1914,7 +2096,7 @@ _darcs
 
         # Perl does a plain -e here (one stat, false for a broken symlink);
         # callers handle links via is_a_link() beforehand
-        if os.path.exists(target_path):
+        if path_exists(target_path):
             debug(4, 3, "| is_a_node(%s): really exists" % target_path)
             return True
 
@@ -1940,12 +2122,18 @@ _darcs
                     "read_a_link() passed a path that is scheduled for removal: %s" % link
                 )
 
-        elif os.path.islink(link):
+        elif path_is_link(link):
             debug(4, 2, "read_a_link(%s): is a real link" % link)
             try:
-                return os.readlink(link)
+                link_dest = os.readlink(link)
             except OSError as e:
-                error("Could not read link: %s (%s)", link, e)
+                note_failed_syscall(e)
+                link_dest = ''
+            # Perl's "readlink $link or error(...)" also dies when readlink
+            # succeeded but returned a false string, i.e. "" or "0"
+            if not perl_true(link_dest):
+                error("Could not read link: %s (%s)", link, errno_string())
+            return link_dest
 
         internal_error("read_a_link() passed a non-link path: %s" % link)
 
@@ -2049,7 +2237,10 @@ _darcs
         try:
             source = os.readlink(file_path)
         except OSError as e:
-            error("could not readlink %s (%s)", file_path, e)
+            note_failed_syscall(e)
+            source = ''
+        if not perl_true(source):
+            error("could not readlink %s (%s)", file_path, errno_string())
 
         task = {
             'action': 'remove',
@@ -2399,6 +2590,20 @@ def getopt_error(msg):
     usage(exit_code=1)
 
 
+def compile_option_regexp(pattern):
+    """
+    Pre-compile an --ignore/--override/--defer pattern at parse time.
+
+    Getopt::Long runs the option handler inside an eval, so a pattern which
+    fails to compile is reported as an option error: the compiler's own
+    message on stderr, followed by the usage text, and exit 1.
+    """
+    try:
+        return re.compile(pattern)
+    except re.error as e:
+        getopt_error("%s" % e)
+
+
 def find_long_option(name, allow_abbrev):
     """
     Resolve a long option name like Getopt::Long's find_option.
@@ -2453,11 +2658,14 @@ def apply_long_option(given_name, primary, vtype, attached, args, i, options, ac
         elif primary == 'target':
             options['target'] = value
         elif primary == 'ignore':
-            options.setdefault('ignore', []).append(re.compile('(%s)\\Z' % value))
+            options.setdefault('ignore', []).append(
+                compile_option_regexp('(%s)\\Z' % scope_inline_flags(value)))
         elif primary == 'override':
-            options.setdefault('override', []).append(re.compile('\\A(%s)' % value))
+            options.setdefault('override', []).append(
+                compile_option_regexp('\\A(%s)' % scope_inline_flags(value)))
         elif primary == 'defer':
-            options.setdefault('defer', []).append(re.compile('\\A(%s)' % value))
+            options.setdefault('defer', []).append(
+                compile_option_regexp('\\A(%s)' % scope_inline_flags(value)))
     elif vtype == 'optint':
         # 'verbose|v:+': an attached or following integer sets the level,
         # an empty attached value or anything else increments
@@ -2693,15 +2901,17 @@ def sanitize_path_options(options):
         else:
             options['dir'] = os.getcwd()
 
-    if not os.path.isdir(options['dir']):
+    if not path_is_dir(options['dir']):
         usage("--dir value '%s' is not a valid directory" % options['dir'])
 
     if 'target' in options:
-        if not os.path.isdir(options['target']):
+        if not path_is_dir(options['target']):
             usage("--target value '%s' is not a valid directory" % options['target'])
     else:
+        # Perl: parent($options->{dir}) || '.' - so a parent directory
+        # literally named "0" is false and the target becomes '.'
         target = parent(options['dir'])
-        options['target'] = target if target else '.'
+        options['target'] = target if perl_true(target) else '.'
 
 
 def check_packages(pkgs_to_stow, pkgs_to_unstow):
@@ -2709,12 +2919,14 @@ def check_packages(pkgs_to_stow, pkgs_to_unstow):
     if not pkgs_to_stow and not pkgs_to_unstow:
         usage("No packages to stow or unstow")
 
-    # check package arguments
-    for package in list(pkgs_to_stow) + list(pkgs_to_unstow):
-        # delete trailing slashes
-        package = package.rstrip('/')
-        if '/' in package:
-            error("Slashes are not permitted in package names")
+    # check package arguments; Perl's foreach aliases the list elements, so
+    # the stripped names are what the caller goes on to use
+    for packages in (pkgs_to_stow, pkgs_to_unstow):
+        for i in range(len(packages)):
+            # delete trailing slashes
+            packages[i] = re.sub(r'/+$', '', packages[i])
+            if '/' in packages[i]:
+                error("Slashes are not permitted in package names")
 
 
 def get_config_file_options():
@@ -2727,15 +2939,17 @@ def get_config_file_options():
     defaults = []
     dirlist = ['.stowrc']
 
+    # Perl tests defined($ENV{HOME}), so an empty but set HOME still
+    # produces the interpolated path "/.stowrc"
     home = os.environ.get('HOME')
-    if home:
-        dirlist.insert(0, os.path.join(home, '.stowrc'))
+    if home is not None:
+        dirlist.insert(0, home + '/.stowrc')
 
     for file_path in dirlist:
         # Perl's -r test is a single stat; a failed stat leaves errno set,
         # which a later die() picks up as the exit code (via _last_errno)
         try:
-            st = os.stat(file_path)
+            st = stat_path(file_path)
         except OSError as e:
             _last_errno = e.errno
             continue
@@ -2743,8 +2957,11 @@ def get_config_file_options():
             continue
         try:
             # newline='\n' splits lines exactly like Perl's <$FILE> (on
-            # newline only, no CR translation); the strip matches chomp
-            with io.open(file_path, 'r', newline='\n') as f:
+            # newline only, no CR translation); the strip matches chomp.
+            # surrogateescape carries bytes that are not valid UTF-8 through
+            # unchanged, matching Perl's encoding-free read
+            with io.open(file_path, 'r', encoding='utf-8',
+                         errors='surrogateescape', newline='\n') as f:
                 for line in f:
                     if line.endswith('\n'):
                         line = line[:-1]
@@ -2790,8 +3007,10 @@ def expand_environment(path, source):
             sys.exit(1)
         return os.environ[var]
 
-    # Replace ${VAR} first (handles spaces in var names)
-    path = re.sub(r'(?<!\\)\$\{([^}]+)\}', replace_var, path)
+    # Replace ${VAR} first (handles spaces in var names). The name is
+    # spelled out as Perl's byte-wise (?:\w|\s)+, so a brace group holding
+    # anything else - "${HOME:-/tmp}" - is left alone as literal text
+    path = re.sub(r'(?<!\\)\$\{((?:[A-Za-z0-9_]|[ \t\n\v\f\r])+)\}', replace_var, path)
     # Replace $VAR
     path = re.sub(r'(?<!\\)\$(\w+)', replace_var, path)
     # Remove \$ escapes
@@ -2815,24 +3034,33 @@ def expand_tilde(path):
         match = re.match(r'^~([^/]*)', path)
         if match:
             user = match.group(1)
-            if user:
+            # Perl's "$1 ? (getpwnam($1))[7] : ..." - a user name of "0"
+            # is false, so "~0/x" takes the bare-tilde branch
+            if perl_true(user):
                 # ~username - get that user's home directory
                 try:
                     home = pwd.getpwnam(user)[5]
                 except KeyError:
-                    # User not found, leave the path unchanged
-                    home = None
+                    # Perl's getpwnam returns the empty list for an unknown
+                    # user, so the substitution interpolates an undefined
+                    # value: it warns, and expands to the empty string
+                    sys.stderr.write(
+                        "Use of uninitialized value in substitution iterator\n")
+                    home = ''
             else:
-                # Just ~ - get current user's home
-                home = os.environ.get('HOME') or os.environ.get('LOGDIR')
-                if not home:
+                # Just ~ - get current user's home. Perl's
+                # $ENV{HOME} || $ENV{LOGDIR} || (getpwuid($<))[7], so a
+                # HOME or LOGDIR of "0" falls through to the next source
+                home = os.environ.get('HOME', '')
+                if not perl_true(home):
+                    home = os.environ.get('LOGDIR', '')
+                if not perl_true(home):
                     try:
                         home = pwd.getpwuid(os.getuid())[5]
                     except KeyError:
-                        home = None
+                        home = ''
 
-            if home:
-                path = home + path[len(match.group(0)):]
+            path = home + path[len(match.group(0)):]
 
     # Unescape escaped tildes only after expansion, like Perl
     return path.replace('\\~', '~')
@@ -2897,4 +3125,8 @@ def version():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except DieError as die:
+        sys.stderr.write("%s\n" % die)
+        sys.exit(255)

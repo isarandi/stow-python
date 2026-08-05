@@ -27,6 +27,7 @@ Based on Perl t/cli_options.t
 import os
 
 from conftest import (
+    assert_stow_match,
     check_dir,
     check_link,
     check_not_exists,
@@ -435,3 +436,56 @@ class TestCliOptionsBoth:
             check_on_simulate=False,
             compare_fs_ops=True,
         )
+
+    def test_package_name_trailing_slash_is_stripped(self, stow_env):
+        """A trailing slash on a package name is stripped before it is used."""
+        stow_env.create_package("pkg", {"file": "content"})
+
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "file", "../stow/pkg/file")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "-v2", "pkg/"],
+            setup,
+            check,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+    def test_missing_package_name_trailing_slash_is_stripped(self, stow_env):
+        """The "does not contain package" error names the stripped package."""
+        stow_env.create_package("pkg", {"file": "content"})
+        args = ["-t", stow_env.target_dir, "zz/"]
+
+        def setup():
+            pass
+
+        assert_stow_match(stow_env, args, setup)
+
+        rc, _stdout, stderr = stow_env.run_python_stow(args)
+        assert rc != 0
+        assert stderr.endswith("does not contain package zz\n")
+
+    def test_dir_whose_parent_is_named_zero(self, stow_env):
+        """--dir 0/sub makes the default target '.', not the parent "0".
+
+        Perl derives the default target from parent($dir) || '.', and the
+        directory name "0" is false, so it falls through to '.'.
+        """
+        pkg_dir = os.path.join(stow_env.stow_dir, "0", "sub", "pkg0")
+        os.makedirs(pkg_dir)
+        with open(os.path.join(pkg_dir, "file0"), "w") as f:
+            f.write("content")
+
+        def setup():
+            pass
+
+        # Simulated, so the link destination is only reported, not created
+        _rc, _stdout, stderr, _state = assert_stow_match(
+            stow_env, ["-n", "-v", "--dir", "0/sub", "pkg0"], setup
+        )
+        assert "LINK: file0 => 0/sub/pkg0/file0\n" in stderr

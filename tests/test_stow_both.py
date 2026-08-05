@@ -295,3 +295,59 @@ class TestStowBoth:
             check_on_simulate=True,
             compare_fs_ops=True,
         )
+
+    def test_unreadable_package_dir(self, stow_env):
+        """An unreadable package dir reports strerror and exits with errno."""
+        stow_env.create_package("pkg11", {"file11": "content"})
+        pkg_dir = os.path.join(stow_env.stow_dir, "pkg11")
+        args = ["-t", stow_env.target_dir, "pkg11"]
+
+        def setup():
+            os.chmod(pkg_dir, 0o000)
+
+        try:
+            assert_stow_match(stow_env, args, setup)
+
+            setup()
+            rc, _stdout, stderr = stow_env.run_python_stow(args)
+            assert rc == 13
+            assert stderr == (
+                "stow: ERROR: cannot read directory: ../stow/pkg11 "
+                "(Permission denied)\n"
+            )
+        finally:
+            os.chmod(pkg_dir, 0o755)
+
+    def test_home_tildified_only_before_slash_or_end(self, stow_env):
+        """The -v3 trace tildifies $HOME only when a slash or the end follows."""
+        stow_env.create_package("pkg12", {"bin12/file12": "content"})
+
+        def setup():
+            pass
+
+        # HOME is the test root, which is also the target here, so the
+        # trailing "(cwd=$HOME)" must stay spelled out
+        assert_stow_match(
+            stow_env, ["-n", "-v3", "-t", stow_env.tmpdir, "pkg12"], setup
+        )
+
+    def test_package_link_pointing_at_zero(self, stow_env):
+        """A package link whose destination is "0" aborts the run.
+
+        Perl reads the link with "readlink $link or error(...)", and the
+        string "0" is false, so the successful readlink still dies.
+        """
+        stow_env.create_package("pkg13", {})
+        os.symlink("0", os.path.join(stow_env.stow_dir, "pkg13", "link13"))
+
+        def setup():
+            pass
+
+        rc, _stdout, stderr, _state = assert_stow_match(
+            stow_env, ["-t", stow_env.target_dir, "pkg13"], setup
+        )
+        assert rc == 2
+        assert stderr == (
+            "stow: ERROR: Could not read link: ../stow/pkg13/link13 "
+            "(No such file or directory)\n"
+        )

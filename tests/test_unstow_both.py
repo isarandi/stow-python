@@ -27,6 +27,7 @@ Based on Perl t/unstow.t
 import os
 
 from conftest import (
+    assert_stow_match,
     check_dir,
     check_link,
     check_not_exists,
@@ -209,4 +210,47 @@ class TestUnstowBoth:
             check,
             check_on_simulate=False,
             compare_fs_ops=True,
+        )
+
+    def test_unreadable_package_subdir(self, stow_env):
+        """An unreadable package subdir reports strerror and exits with errno."""
+        stow_env.create_package("pkg", {"sub/file": "content"})
+        sub_dir = os.path.join(stow_env.stow_dir, "pkg", "sub")
+        args = ["-t", stow_env.target_dir, "-D", "pkg"]
+
+        def setup():
+            stow_env.create_target_dir("sub")
+            stow_env.create_target_link("sub/file", "../../stow/pkg/sub/file")
+            os.chmod(sub_dir, 0o000)
+
+        try:
+            assert_stow_match(stow_env, args, setup)
+
+            stow_env.reset_target()
+            setup()
+            rc, _stdout, stderr = stow_env.run_python_stow(args)
+            assert rc == 13
+            assert stderr == (
+                "stow: ERROR: cannot read directory: ../stow/pkg/sub "
+                "(Permission denied)\n"
+            )
+        finally:
+            os.chmod(sub_dir, 0o755)
+
+    def test_unstow_target_link_pointing_at_zero(self, stow_env):
+        """A target link whose destination is "0" aborts the unstow.
+
+        read_a_link() dies on it, because Perl's "readlink $link or
+        error(...)" treats the string "0" as false.
+        """
+        stow_env.create_package("pkg", {"file": "content"})
+        args = ["-t", stow_env.target_dir, "-D", "pkg"]
+
+        def setup():
+            stow_env.create_target_link("file", "0")
+
+        rc, _stdout, stderr, _state = assert_stow_match(stow_env, args, setup)
+        assert rc == 2
+        assert stderr == (
+            "stow: ERROR: Could not read link: file (No such file or directory)\n"
         )

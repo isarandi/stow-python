@@ -25,6 +25,7 @@ symlinks identically during stow/unstow operations.
 import os
 
 from conftest import (
+    assert_stow_match,
     check_link,
     check_not_exists,
     run_both_tests,
@@ -123,6 +124,51 @@ class TestCleanupInvalidLinksBoth:
         run_both_tests(
             stow_env,
             ["-t", stow_env.target_dir, "-R", "pkg4"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
+
+    def test_cleanup_link_pointing_at_zero(self, stow_env):
+        """A link destination of "0" aborts the clean-up.
+
+        cleanup_invalid_links() reads the link itself and rejects a false
+        value, and Perl counts the string "0" as false. That error carries
+        no ($!) part, unlike the one read_a_link() raises.
+        """
+        stow_env.create_package("pkg5", {"bin5/file5": "content"})
+        args = ["-t", stow_env.target_dir, "-D", "pkg5"]
+
+        def setup():
+            stow_env.create_target_dir("bin5")
+            stow_env.create_target_link("bin5/file5", "../../stow/pkg5/bin5/file5")
+            stow_env.create_target_link("bin5/zero5", "0")
+
+        rc, _stdout, stderr, _state = assert_stow_match(stow_env, args, setup)
+        assert rc == 2
+        assert stderr == "stow: ERROR: Could not read link bin5/zero5\n"
+
+    def test_cleanup_keeps_link_owned_by_package_named_zero(self, stow_env):
+        """An orphaned link owned by package "0" is left in place.
+
+        cleanup_invalid_links() only removes a link when its owning
+        package name is true, and Perl reads the name "0" as false.
+        """
+        stow_env.create_package("pkg6", {"bin6/file6": "content"})
+
+        def setup():
+            stow_env.create_target_dir("bin6")
+            stow_env.create_target_link("bin6/file6", "../../stow/pkg6/bin6/file6")
+            # Orphaned: ../stow/0/bin6/orphan6 does not exist
+            stow_env.create_target_link("bin6/orphan6", "../../stow/0/bin6/orphan6")
+
+        def check(env):
+            check_link(env, "bin6/orphan6", "../../stow/0/bin6/orphan6")
+            check_not_exists(env, "bin6/file6")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "-D", "pkg6"],
             setup,
             check,
             compare_fs_ops=True,

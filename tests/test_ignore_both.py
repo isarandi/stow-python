@@ -27,6 +27,7 @@ Based on Perl t/ignore.t
 import os
 
 from conftest import (
+    assert_stow_match,
     check_link,
     check_not_exists,
     run_both_tests,
@@ -240,6 +241,196 @@ class TestIgnoreBoth:
         run_both_tests(
             stow_env,
             ["-t", stow_env.target_dir, "--ignore=\\.log$", "pkg"],
+            setup,
+            check,
+            check_on_simulate=False,
+            compare_fs_ops=True,
+        )
+
+    def test_global_ignore_found_relative_to_cwd_when_home_empty(self, stow_env):
+        """With an empty HOME the global ignore file is looked up in the target."""
+        stow_env.create_package(
+            "pkg",
+            {
+                "bin/keep": "keep",
+                "bin/global_ignored": "ignore",
+            },
+        )
+
+        def setup():
+            stow_env.create_target_dir("bin")
+            # No HOME to join onto, so the bare name resolves against the
+            # target directory, which is where stow has chdir'd to by then
+            with open(
+                os.path.join(stow_env.target_dir, ".stow-global-ignore"), "w"
+            ) as f:
+                f.write("global_ignored\n")
+
+        assert_stow_match(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg"],
+            setup,
+            env={"HOME": ""},
+        )
+
+        stow_env.reset_target()
+        setup()
+        stow_env.run_python_stow(["-t", stow_env.target_dir, "pkg"], env={"HOME": ""})
+        check_link(stow_env, "bin/keep", "../../stow/pkg/bin/keep")
+        check_not_exists(stow_env, "bin/global_ignored")
+
+    def test_ignore_file_with_non_utf8_bytes(self, stow_env):
+        """An ignore file holding non-UTF-8 bytes is read like Perl reads bytes."""
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        with open(
+            os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore"), "wb"
+        ) as f:
+            f.write(b"\xff\n")
+
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "bin", "../stow/pkg/bin")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg"],
+            setup,
+            check,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+    def test_ignore_file_with_bare_cr_is_one_pattern(self, stow_env):
+        """A bare CR stays inside its pattern instead of splitting the record."""
+        stow_env.create_package("pkg", {"bar": "a", "baz": "b"})
+        with open(
+            os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore"), "wb"
+        ) as f:
+            f.write(b"bar\rbaz\n")
+
+        def setup():
+            pass
+
+        def check(env):
+            check_link(env, "bar", "../stow/pkg/bar")
+            check_link(env, "baz", "../stow/pkg/baz")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg"],
+            setup,
+            check,
+            check_on_simulate=False,
+            compare_fs_ops=False,
+        )
+
+    def test_unreadable_ignore_file_debug_line(self, stow_env):
+        """The -v4 "Failed to open" line reports strerror, as Perl reports $!."""
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        ignore_file = os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore")
+        with open(ignore_file, "w") as f:
+            f.write("nothing\n")
+        args = ["-v4", "-t", stow_env.target_dir, "pkg"]
+
+        def setup():
+            os.chmod(ignore_file, 0o000)
+
+        try:
+            assert_stow_match(stow_env, args, setup)
+
+            stow_env.reset_target()
+            setup()
+            _rc, _stdout, stderr = stow_env.run_python_stow(args)
+            assert (
+                "Failed to open ../stow/pkg/.stow-local-ignore: Permission denied\n"
+                in stderr
+            )
+        finally:
+            os.chmod(ignore_file, 0o644)
+
+    def test_malformed_ignore_pattern_reports_one_line(self, stow_env):
+        """A pattern that will not compile dies with a single message line.
+
+        Perl and Python word the compiler's complaint differently, so only
+        the shape of the failure is compared here: one line, no traceback,
+        and the exit code of an uncaught die().
+        """
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        with open(
+            os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore"), "w"
+        ) as f:
+            f.write("foo(\n")
+
+        args = ["-t", stow_env.target_dir, "pkg"]
+        perl_rc, _perl_stdout, perl_stderr = stow_env.run_perl_stow(args)
+        stow_env.reset_target()
+        python_rc, python_stdout, python_stderr = stow_env.run_python_stow(args)
+
+        assert perl_rc == 255
+        assert perl_stderr.startswith("Failed to compile regexp: ")
+        assert python_rc == 255
+        assert python_stdout == ""
+        assert "Traceback" not in python_stderr
+        assert python_stderr.startswith("Failed to compile regexp: ")
+        assert python_stderr.count("\n") == 1
+
+    def test_ignore_cli_pattern_with_inline_flag(self, stow_env):
+        """A leading inline flag group in --ignore is honoured.
+
+        Perl scopes "(?i)" to the rest of the group it sits in, so the
+        pattern matches case-insensitively.
+        """
+        stow_env.create_package(
+            "pkg",
+            {"bin/man": "lower", "bin/MAN": "upper", "bin/other": "kept"},
+        )
+
+        def setup():
+            stow_env.create_target_dir("bin")
+
+        def check(env):
+            check_link(env, "bin/other", "../../stow/pkg/bin/other")
+            check_not_exists(env, "bin/man")
+            check_not_exists(env, "bin/MAN")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--ignore=(?i)man", "pkg"],
+            setup,
+            check,
+            check_on_simulate=False,
+            compare_fs_ops=True,
+        )
+
+    def test_ignore_file_pattern_with_inline_flag(self, stow_env):
+        """A leading inline flag group in an ignore file is honoured.
+
+        The file holds a single pattern: Perl walks the ignore list in
+        randomised hash order, so with more than one pattern it is not
+        fixed which of them trail the flagged one and inherit its flag.
+        """
+        stow_env.create_package(
+            "pkg",
+            {"bin/foo": "lower", "bin/FOO": "upper", "bin/keep": "kept"},
+        )
+        with open(
+            os.path.join(stow_env.stow_dir, "pkg", ".stow-local-ignore"), "w"
+        ) as f:
+            f.write("(?i)foo\n")
+
+        def setup():
+            stow_env.create_target_dir("bin")
+
+        def check(env):
+            check_link(env, "bin/keep", "../../stow/pkg/bin/keep")
+            check_not_exists(env, "bin/foo")
+            check_not_exists(env, "bin/FOO")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "pkg"],
             setup,
             check,
             check_on_simulate=False,

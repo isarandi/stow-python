@@ -102,6 +102,27 @@ class TestDeferBoth:
             compare_fs_ops=True,
         )
 
+    def test_defer_pattern_with_inline_flag(self, stow_env):
+        """A leading inline flag group in --defer is honoured."""
+        stow_env.create_package("pkg1c", {"man/file": "first"})
+        stow_env.create_package("pkg2c", {"man/file": "second"})
+
+        def setup():
+            stow_env.create_target_dir("man")
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1c"])
+
+        def check(env):
+            check_link(env, "man/file", "../../stow/pkg1c/man/file")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--defer=(?i)MAN", "pkg2c"],
+            setup,
+            check,
+            check_on_simulate=True,
+            compare_fs_ops=True,
+        )
+
 
 class TestOverrideBoth:
     """Test override pattern handling - black-box comparison of both implementations."""
@@ -171,6 +192,27 @@ class TestOverrideBoth:
             setup,
             check,
             check_on_simulate=True,
+            compare_fs_ops=True,
+        )
+
+    def test_override_pattern_with_inline_flag(self, stow_env):
+        """A leading inline flag group in --override is honoured."""
+        stow_env.create_package("pkg1d", {"man/file": "first"})
+        stow_env.create_package("pkg2d", {"man/file": "second"})
+
+        def setup():
+            stow_env.create_target_dir("man")
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg1d"])
+
+        def check(env):
+            check_link(env, "man/file", "../../stow/pkg2d/man/file")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--override=(?i)MAN", "pkg2d"],
+            setup,
+            check,
+            check_on_simulate=False,
             compare_fs_ops=True,
         )
 

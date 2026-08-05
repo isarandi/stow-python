@@ -347,10 +347,19 @@ class TestExpandTilde:
         result = expand_tilde('/a/\\~b')
         assert result == '/a/~b', 'middle \\~ unescaped'
 
-    def test_unknown_user_with_escaped_tilde(self, test_env):
-        """~nosuchuser stays literal; \\~ still unescapes afterwards."""
+    def test_unknown_user_with_escaped_tilde(self, test_env, capsys):
+        """~nosuchuser expands to nothing and warns; \\~ still unescapes.
+
+        Perl's getpwnam returns the empty list for an unknown user, so the
+        substitution interpolates an undefined value: it warns about that
+        and replaces the ~user prefix with the empty string.
+        """
         result = expand_tilde('~nosuchuser-xyzzy/a\\~b')
-        assert result == '~nosuchuser-xyzzy/a~b', 'unknown user literal, \\~ unescaped'
+        assert result == '/a~b', 'unknown user expands to empty, \\~ unescaped'
+        assert (
+            'Use of uninitialized value in substitution iterator'
+            in capsys.readouterr().err
+        )
 
 
 class TestExpansionInRcFile:
