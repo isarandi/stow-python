@@ -21,13 +21,18 @@ class StowError(Exception):
     """Base exception for stow operation errors.
 
     Attributes:
-        message: Error description
-        errno: Exit code (for CLI compatibility)
+        message: Error description, which Perl's error() treats as a
+            sprintf format string
+        errno: Exit code, or None to exit with the errno of the last
+            failed syscall the way Perl's die() does
+        format_args: Arguments the message is formatted with, for the one
+            Perl call site that passes any
     """
 
-    def __init__(self, message: str, errno: int = 1):
+    def __init__(self, message: str, errno: int | None = None, format_args: tuple = ()):
         self.message = message
         self.errno = errno
+        self.format_args = format_args
         super().__init__(message)
 
 
@@ -35,7 +40,7 @@ class StowInternalError(StowError):
     """Internal error indicating a bug in stow."""
 
     def __init__(self, message: str):
-        super().__init__(message, errno=1)
+        super().__init__(message)
 
 
 class StowConflictError(StowError):
@@ -115,11 +120,35 @@ class MarkedStowDir:
 
 
 @dataclass(slots=True, frozen=True)
+class PerlRegexp:
+    """A compiled regexp that keeps the Perl source text it was built from.
+
+    Stow interpolates its compiled regexps straight into trace messages, so
+    what the user sees is Perl's qr// stringification: the source text
+    wrapped in "(?^:...)". The source is kept separately because the text
+    Python has to compile is not always the text Perl compiled — Perl's \\z
+    is Python's \\Z, and inline flag groups get rescoped.
+    """
+
+    compiled: re.Pattern
+    source: str
+
+    def search(self, string: str):
+        return self.compiled.search(string)
+
+    def match(self, string: str):
+        return self.compiled.match(string)
+
+    def __str__(self) -> str:
+        return f"(?^:{self.source})"
+
+
+@dataclass(slots=True, frozen=True)
 class IgnorePatterns:
     """Compiled ignore patterns from stow ignore files."""
 
-    default_regexp: re.Pattern | None
-    local_regexp: re.Pattern | None
+    default_regexp: PerlRegexp | None
+    local_regexp: PerlRegexp | None
 
 
 @dataclass(frozen=True)
@@ -134,9 +163,9 @@ class StowConfig:
     simulate: bool = False
     verbose: int = 0
     compat: bool = False
-    ignore: tuple[re.Pattern, ...] = ()
-    defer: tuple[re.Pattern, ...] = ()
-    override: tuple[re.Pattern, ...] = ()
+    ignore: tuple[PerlRegexp, ...] = ()
+    defer: tuple[PerlRegexp, ...] = ()
+    override: tuple[PerlRegexp, ...] = ()
 
 
 @dataclass

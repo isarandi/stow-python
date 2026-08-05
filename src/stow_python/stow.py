@@ -25,16 +25,22 @@ from stow_python.types import (
     TaskAction,
     TaskType,
     StowError,
+    StowCLIError,
     StowInternalError,
     StowedPath,
     PackageSubpath,
     MarkedStowDir,
     IgnorePatterns,
+    PerlRegexp,
     StowConfig,
     StowResult,
 )
 from stow_python.util import (
     debug,
+    last_errno_message,
+    perl_true,
+    record_errno,
+    warn_uninitialized,
     set_debug_level,
     join_paths,
     parent,
@@ -43,6 +49,8 @@ from stow_python.util import (
     unadjust_dotfile,
     require_directory,
     move,
+    scope_inline_flags,
+    sorted_by_bytes,
     exists_with_newline_warning,
     isdir_with_newline_warning,
     islink_with_newline_warning,
@@ -56,7 +64,8 @@ def _chdir(path: str, name: str = "directory", restore: bool = False) -> None:
     try:
         os.chdir(path)
     except OSError as e:
-        raise StowError(f"Cannot chdir to {name}: {path} ({e})") from e
+        record_errno(e.errno)
+        raise StowError(f"Cannot chdir to {name}: {path} ({e.strerror})") from e
     if restore:
         debug(3, 0, f"cwd restored to {path}")
     else:
@@ -64,6 +73,25 @@ def _chdir(path: str, name: str = "directory", restore: bool = False) -> None:
 
 LOCAL_IGNORE_FILE = ".stow-local-ignore"
 GLOBAL_IGNORE_FILE = ".stow-global-ignore"
+
+# Lines of the two $HOME substitutions in Stow.pm, which is where an unset
+# HOME warns.
+_STOW_TILDIFY_LINE = 409
+_UNSTOW_TILDIFY_LINE = 760
+
+
+def _home_as_regexp(warn_line: int) -> str:
+    """$HOME as Perl interpolates it into the trace tildify substitutions.
+
+    Perl interpolates $ENV{HOME} into the pattern, so its contents are read
+    as a regexp, and an unset HOME both warns and leaves the pattern able
+    to match at every position.
+    """
+    home = os.environ.get("HOME")
+    if home is None:
+        warn_uninitialized('$ENV{"HOME"} in regexp compilation', warn_line)
+        return ""
+    return home
 
 
 # =============================================================================
@@ -169,13 +197,25 @@ def _resolve_target(config: StowConfig) -> StowConfig:
 
 
 def _compile_patterns(
-    patterns: Iterable[str | re.Pattern] | None, prefix: str = "", suffix: str = ""
-) -> list[re.Pattern]:
-    """Compile pattern strings to regex, passing through already-compiled patterns."""
+    patterns: Iterable[str | PerlRegexp] | None,
+    prefix: str = "",
+    suffix: str = "",
+    perl_suffix: str | None = None,
+) -> list[PerlRegexp]:
+    """Compile pattern strings to regex, passing through compiled patterns.
+
+    perl_suffix is the anchor as Perl spells it, for the trace messages the
+    compiled regexp is interpolated into; it defaults to the Python one.
+    """
     if not patterns:
         return []
     return [
-        p if isinstance(p, re.Pattern) else re.compile(rf"{prefix}({p}){suffix}")
+        p
+        if isinstance(p, PerlRegexp)
+        else PerlRegexp(
+            re.compile(scope_inline_flags(rf"{prefix}({p}){suffix}")),
+            rf"{prefix}({p}){perl_suffix if perl_suffix is not None else suffix}",
+        )
         for p in patterns
     ]
 
@@ -325,10 +365,7 @@ class _Stower:
         msg = f"Stowing contents of {stow_path} / {package} / {pkg_subdir} (cwd={cwd})"
 
         # Replace $HOME with ~ for readability
-        home = os.environ.get("HOME", "")
-        if home:
-            msg = msg.replace(home + "/", "~/")
-            msg = msg.replace(home, "~")
+        msg = re.sub(_home_as_regexp(_STOW_TILDIFY_LINE) + r"(/|$)", r"~\1", msg)
 
         debug(3, 0, msg)
         debug(4, 1, f"target subdir is {target_subdir}")
@@ -343,11 +380,12 @@ class _Stower:
         try:
             listing = os.listdir(pkg_path_from_cwd)
         except OSError as e:
+            record_errno(e.errno)
             raise StowError(
-                f"cannot read directory: {pkg_path_from_cwd} ({e.strerror})", errno=2
+                f"cannot read directory: {pkg_path_from_cwd} ({e.strerror})"
             ) from e
 
-        for node in sorted(listing):
+        for node in sorted_by_bytes(listing):
             if node in (".", ".."):
                 continue
 
@@ -427,7 +465,7 @@ class _Stower:
     ) -> None:
         """Handle stowing when target is an existing link."""
         existing_link_dest = self._read_a_link(target_subpath)
-        if not existing_link_dest:
+        if not perl_true(existing_link_dest):
             raise StowError(f"Could not read link: {target_subpath}")
 
         debug(4, 1, f"Evaluate existing link: {target_subpath} => {existing_link_dest}")
@@ -537,8 +575,7 @@ class _Stower:
         compat_str = ", compat" if self.c.compat else ""
         msg = f"Unstowing contents of {self.stow_path} / {package} / {pkg_subdir} (cwd={cwd}{compat_str})"
 
-        if home := os.environ.get("HOME"):
-            msg = msg.replace(home + "/", "~/")
+        msg = re.sub(_home_as_regexp(_UNSTOW_TILDIFY_LINE) + "/", "~/", msg)
 
         debug(3, 0, msg)
         debug(4, 1, f"target subdir is {target_subdir}")
@@ -575,11 +612,10 @@ class _Stower:
         try:
             listing = os.listdir(dir_to_read)
         except OSError as e:
-            raise StowError(
-                f"cannot read directory: {dir_to_read} ({e.strerror})", errno=2
-            ) from e
+            record_errno(e.errno)
+            raise StowError(f"cannot read directory: {dir_to_read} ({e.strerror})") from e
 
-        for node in sorted(listing):
+        for node in sorted_by_bytes(listing):
             if node in (".", ".."):
                 continue
 
@@ -622,7 +658,8 @@ class _Stower:
         elif isdir_with_newline_warning(target_subpath):
             self.unstow_contents(package, pkg_subpath, target_subpath)
             # This action may have made the parent directory foldable
-            if parent_in_pkg := self._foldable(target_subpath):
+            parent_in_pkg = self._foldable(target_subpath)
+            if perl_true(parent_in_pkg):
                 self._fold_tree(target_subpath, parent_in_pkg)
         elif exists_with_newline_warning(target_subpath):
             debug(2, 1, f"{target_subpath} doesn't need to be unstowed")
@@ -636,7 +673,7 @@ class _Stower:
 
         # Where is the link pointing?
         link_dest = self._read_a_link(target_subpath)
-        if not link_dest:
+        if not perl_true(link_dest):
             raise StowError(f"Could not read link: {target_subpath}")
 
         if link_dest.startswith("/"):
@@ -686,11 +723,10 @@ class _Stower:
         try:
             listing = os.listdir(dir_path)
         except OSError as e:
-            raise StowError(
-                f"cannot read directory: {dir_path} ({e.strerror})", errno=2
-            ) from e
+            record_errno(e.errno)
+            raise StowError(f"cannot read directory: {dir_path} ({e.strerror})") from e
 
-        for node in sorted(listing):
+        for node in sorted_by_bytes(listing):
             if node in (".", ".."):
                 continue
 
@@ -712,10 +748,16 @@ class _Stower:
                     debug(4, 2, f"{node_path} scheduled for removal; skipping clean-up")
                 continue
 
+            # Perl calls readlink directly here (not read_a_link), so its
+            # error message has neither a colon nor the ($!) suffix
             try:
                 link_dest = os.readlink(node_path)
             except OSError as e:
+                record_errno(e.errno)
                 raise StowError(f"Could not read link {node_path}") from e
+
+            if not perl_true(link_dest):
+                raise StowError(f"Could not read link {node_path}")
 
             target_subpath = join_paths(dir_path, link_dest)
             debug(4, 2, f"join {dir_path} {link_dest}")
@@ -738,7 +780,8 @@ class _Stower:
                 f"Checking whether valid link {node_path} -> {link_dest} is owned by stow",
             )
 
-            if owner := self._get_owning_package(node_path, link_dest):
+            owner = self._get_owning_package(node_path, link_dest)
+            if perl_true(owner):
                 debug(
                     2,
                     0,
@@ -761,11 +804,17 @@ class _Stower:
         try:
             listing = os.listdir(target_subdir)
         except OSError as e:
-            raise StowError(f'Cannot read directory "{target_subdir}" ({e})') from e
+            record_errno(e.errno)
+            raise StowError(
+                f'Cannot read directory "{target_subdir}" ({e.strerror})\n'
+            ) from e
 
-        parent_in_pkg = None
+        # Perl seeds this with the empty string and re-tests for that exact
+        # value, so a first link whose destination has no directory part
+        # leaves the common parent to be set by the next link instead
+        parent_in_pkg = ""
 
-        for node in sorted(listing):
+        for node in sorted_by_bytes(listing):
             if node in (".", ".."):
                 continue
 
@@ -779,11 +828,11 @@ class _Stower:
                 return None
 
             link_dest = self._read_a_link(target_node_path)
-            if not link_dest:
+            if not perl_true(link_dest):
                 raise StowError(f"Could not read link {target_node_path}")
 
             new_parent = parent(link_dest)
-            if parent_in_pkg is None:
+            if parent_in_pkg == "":
                 parent_in_pkg = new_parent
             elif parent_in_pkg != new_parent:
                 debug(
@@ -793,13 +842,13 @@ class _Stower:
                 )
                 return None
 
-        if not parent_in_pkg:
+        if not perl_true(parent_in_pkg):
             debug(3, 3, f"Not foldable because {target_subdir} contains no links")
             return None
 
         parent_in_pkg = parent_in_pkg.removeprefix("../")
 
-        if self._get_owning_package(target_subdir, parent_in_pkg):
+        if perl_true(self._get_owning_package(target_subdir, parent_in_pkg)):
             debug(3, 3, f"{target_subdir} is foldable")
             return parent_in_pkg
         else:
@@ -813,9 +862,12 @@ class _Stower:
         try:
             listing = os.listdir(target_subdir)
         except OSError as e:
-            raise StowError(f'Cannot read directory "{target_subdir}" ({e})') from e
+            record_errno(e.errno)
+            raise StowError(
+                f'Cannot read directory "{target_subdir}" ({e.strerror})\n'
+            ) from e
 
-        for node in sorted(listing):
+        for node in sorted_by_bytes(listing):
             if node in (".", ".."):
                 continue
             node_path = join_paths(target_subdir, node)
@@ -832,24 +884,30 @@ class _Stower:
                 try:
                     os.mkdir(task.path, 0o777)
                 except OSError as e:
+                    record_errno(e.errno)
                     raise StowError(
-                        f"Could not create directory: {task.path} ({e})"
+                        f"Could not create directory: {task.path} ({e.strerror})"
                     ) from e
 
             case (TaskAction.CREATE, TaskType.LINK):
                 try:
                     os.symlink(task.source, task.path)
                 except OSError as e:
+                    # The one message Perl builds with sprintf arguments,
+                    # so a percent in either path is not a conversion
+                    record_errno(e.errno)
                     raise StowError(
-                        f"Could not create symlink: {task.path} => {task.source} ({e})"
+                        f"Could not create symlink: %s => %s ({e.strerror})",
+                        format_args=(task.path, task.source),
                     ) from e
 
             case (TaskAction.REMOVE, TaskType.DIR):
                 try:
                     os.rmdir(task.path)
                 except OSError as e:
+                    record_errno(e.errno)
                     raise StowError(
-                        f"Could not remove directory: {task.path} ({e})"
+                        f"Could not remove directory: {task.path} ({e.strerror})"
                     ) from e
 
             case (TaskAction.REMOVE, TaskType.LINK):
@@ -861,14 +919,18 @@ class _Stower:
                         raise OSError(errno.EISDIR, "Is a directory", task.path)
                     os.unlink(task.path)
                 except OSError as e:
-                    raise StowError(f"Could not remove link: {task.path} ({e})") from e
+                    record_errno(e.errno)
+                    raise StowError(
+                        f"Could not remove link: {task.path} ({e.strerror})"
+                    ) from e
 
             case (TaskAction.MOVE, TaskType.FILE):
                 try:
                     move(task.path, task.dest)
                 except (IOError, OSError) as e:
+                    record_errno(e.errno)
                     raise StowError(
-                        f"Could not move {task.path} -> {task.dest} ({e})"
+                        f"Could not move {task.path} -> {task.dest} ({e.strerror})"
                     ) from e
 
             case _:
@@ -886,27 +948,19 @@ class _Stower:
 
         for suffix in self._ignore_pats:
             if suffix.search(target):
-                debug(4, 1, f"Ignoring path {target} due to --ignore={suffix.pattern}")
+                debug(4, 1, f"Ignoring path {target} due to --ignore={suffix}")
                 return True
 
         package_dir = join_paths(stow_path, package)
         patterns = self._get_ignore_regexps(package_dir)
 
         if patterns.default_regexp is not None:
-            debug(
-                5,
-                2,
-                f"Ignore list regexp for paths:    /{patterns.default_regexp.pattern}/",
-            )
+            debug(5, 2, f"Ignore list regexp for paths:    /{patterns.default_regexp}/")
         else:
             debug(5, 2, "Ignore list regexp for paths:    none")
 
         if patterns.local_regexp is not None:
-            debug(
-                5,
-                2,
-                f"Ignore list regexp for segments: /{patterns.local_regexp.pattern}/",
-            )
+            debug(5, 2, f"Ignore list regexp for segments: /{patterns.local_regexp}/")
         else:
             debug(5, 2, "Ignore list regexp for segments: none")
 
@@ -930,8 +984,8 @@ class _Stower:
     def _get_ignore_regexps(self, dir_path: str) -> IgnorePatterns:
         """Get ignore regexps for the given package directory."""
         local_stow_ignore = join_paths(dir_path, LOCAL_IGNORE_FILE)
-        home = os.environ.get("HOME", "")
-        global_stow_ignore = join_paths(home, GLOBAL_IGNORE_FILE)
+        # An unset HOME reaches join_paths as Perl's undef, which warns there
+        global_stow_ignore = join_paths(os.environ.get("HOME"), GLOBAL_IGNORE_FILE)
 
         for file_path in (local_stow_ignore, global_stow_ignore):
             if exists_with_newline_warning(file_path):
@@ -1038,10 +1092,12 @@ class _Stower:
         self, pkg_path_from_cwd: str
     ) -> MarkedStowDir | None:
         """Detect whether path is within a marked stow directory."""
-        segments = [s for s in pkg_path_from_cwd.split("/") if s]
+        # File::Spec->splitdir keeps empty segments, and every prefix goes
+        # back through join_paths, which traces its own work at -v5
+        segments = pkg_path_from_cwd.split("/")
 
         for last_segment in range(len(segments)):
-            path_so_far = "/".join(segments[: last_segment + 1])
+            path_so_far = join_paths(*segments[: last_segment + 1])
             debug(5, 5, f"is {path_so_far} marked stow dir?")
             if self._is_marked_stow_dir(path_so_far):
                 if last_segment == len(segments) - 1:
@@ -1056,11 +1112,27 @@ class _Stower:
 
     def _get_link_task_action(self, path: str) -> Optional[TaskAction]:
         """Finds the link task action for the given path, if there is one."""
-        return self._get_task_action(path, self.link_task_for, "link")
+        action = self._get_task_action(path, self.link_task_for, "link")
+        if action is not None:
+            # The one trace line Perl writes at a different indent, and
+            # without the "| " prefix its neighbours carry
+            debug(
+                4,
+                1,
+                f"link_task_action({path}): link task exists with action {action.value}",
+            )
+        return action
 
     def _get_dir_task_action(self, path: str) -> Optional[TaskAction]:
         """Finds the dir task action for the given path, if there is one."""
-        return self._get_task_action(path, self.dir_task_for, "dir")
+        action = self._get_task_action(path, self.dir_task_for, "dir")
+        if action is not None:
+            debug(
+                4,
+                4,
+                f"| dir_task_action({path}): dir task exists with action {action.value}",
+            )
+        return action
 
     def _get_task_action(
         self, path: str, task_for: dict[str, Task], name: str
@@ -1075,11 +1147,6 @@ class _Stower:
         if action not in (TaskAction.REMOVE, TaskAction.CREATE):
             raise StowInternalError(f"bad task action: {action.value}")
 
-        debug(
-            4,
-            4,
-            f"| {name}_task_action({path}): task exists with action {action.value}",
-        )
         return action
 
     def _is_parent_link_scheduled_for_removal(self, target_path: str) -> bool:
@@ -1209,9 +1276,18 @@ class _Stower:
         elif islink_with_newline_warning(link):
             debug(4, 2, f"read_a_link({link}): is a real link")
             try:
-                return os.readlink(link)
+                link_dest = os.readlink(link)
             except OSError as e:
-                raise StowError(f"Could not read link: {link} ({e})") from e
+                record_errno(e.errno)
+                raise StowError(f"Could not read link: {link} ({e.strerror})") from e
+
+            # Perl guards the readlink with "or error(...)", so a link whose
+            # destination is the string "0" dies here too, reporting the $!
+            # left over from whatever syscall failed last.
+            if not perl_true(link_dest):
+                raise StowError(f"Could not read link: {link} ({last_errno_message()})")
+
+            return link_dest
 
         raise StowInternalError(f"read_a_link() passed a non-link path: {link}")
 
@@ -1298,7 +1374,8 @@ class _Stower:
         try:
             source = os.readlink(file_path)
         except OSError as e:
-            raise StowError(f"could not readlink {file_path} ({e})") from e
+            record_errno(e.errno)
+            raise StowError(f"could not readlink {file_path} ({e.strerror})") from e
 
         task = Task(
             action=TaskAction.REMOVE,
@@ -1407,25 +1484,75 @@ class _Stower:
 # =============================================================================
 
 
-@functools.lru_cache(maxsize=None)
-def _read_ignore_file(file_path: str) -> IgnorePatterns:
-    """Read and parse ignore file, returning compiled regexps (cached)."""
-    try:
-        with open(file_path, "r") as f:
-            patterns: set[str] = set()
-            for line in f:
-                line = line.strip()
-                if line.startswith("#") or not line:
-                    continue
-                line = re.sub(r"\s+#.+", "", line)
-                line = line.replace("\\#", "#")
-                patterns.add(line)
+# Perl memoizes the regexps of each ignore file it manages to read, keyed
+# by path. A file it could not open is NOT remembered, so every node that
+# consults it opens it again.
+_ignore_file_regexps: dict[str, IgnorePatterns] = {}
 
-            # Always ignore the local ignore file itself
-            patterns.add("^/" + re.escape(LOCAL_IGNORE_FILE) + "$")
-            return _compile_ignore_patterns(patterns)
-    except IOError:
+
+def _read_ignore_file(file_path: str) -> IgnorePatterns:
+    """Read and parse an ignore file, memoizing only successful reads."""
+    if file_path in _ignore_file_regexps:
+        debug(4, 2, f"Using memoized regexps from {file_path}")
+        return _ignore_file_regexps[file_path]
+
+    try:
+        # Perl reads the file as \n-delimited byte records; surrogateescape
+        # keeps patterns whose bytes are not valid in the locale encoding
+        # readable, and matchable against filenames decoded the same way.
+        handle = open(file_path, "r", errors="surrogateescape", newline="\n")
+    except OSError as e:
+        record_errno(e.errno)
+        debug(4, 2, f"Failed to open {file_path}: {e.strerror}")
         return IgnorePatterns(None, None)
+
+    with handle:
+        patterns = _parse_ignore_records(handle)
+
+    result = _compile_ignore_patterns(patterns)
+    _ignore_file_regexps[file_path] = result
+    return result
+
+
+def invalidate_memoized_regexp(file_path: str) -> None:
+    """Drop the memoized regexps of one ignore file.
+
+    The regexps of an ignore file are compiled once per process, so a
+    caller that changes such a file mid-run has to say so.
+    """
+    if file_path in _ignore_file_regexps:
+        debug(4, 2, f"Invalidated memoized regexp for {file_path}")
+        del _ignore_file_regexps[file_path]
+    else:
+        debug(2, 1, f"WARNING: no memoized regexp for {file_path} to invalidate")
+
+
+# Perl's \s on the byte records of an ignore file: the ASCII whitespace
+# set only. Python's own str.strip() and \s follow Unicode, which would
+# also eat a no-break space or a line separator that Perl keeps as part of
+# the pattern.
+_ASCII_SPACE = " \t\n\r\f\v"
+_TRAILING_COMMENT = re.compile(r"[ \t\n\r\f\v]+#.+")
+
+
+def _parse_ignore_records(lines: Iterable[str]) -> set[str]:
+    """Turn the records of an ignore list into the set of patterns.
+
+    Perl collects these in a hash, so duplicate records collapse and the
+    order they come back in is the hash's, not the file's.
+    """
+    patterns: set[str] = set()
+    for line in lines:
+        line = line.strip(_ASCII_SPACE)
+        if line.startswith("#") or not line:
+            continue
+        line = _TRAILING_COMMENT.sub("", line)
+        line = line.replace("\\#", "#")
+        patterns.add(line)
+
+    # Local ignore lists always stay within their stow directory
+    patterns.add("^/" + re.escape(LOCAL_IGNORE_FILE) + "$")
+    return patterns
 
 
 def _compile_ignore_patterns(patterns: set[str]) -> IgnorePatterns:
@@ -1439,13 +1566,21 @@ def _compile_ignore_patterns(patterns: set[str]) -> IgnorePatterns:
     try:
         if segment_patterns:
             combined = "|".join(segment_patterns)
-            segment_regexp = re.compile(f"^({combined})$")
+            source = f"^({combined})$"
+            segment_regexp = PerlRegexp(
+                re.compile(scope_inline_flags(source)), source
+            )
 
         if path_patterns:
             combined = "|".join(path_patterns)
-            path_regexp = re.compile(f"(^|/)({combined})(/|$)")
+            source = f"(^|/)({combined})(/|$)"
+            path_regexp = PerlRegexp(re.compile(scope_inline_flags(source)), source)
     except re.error as e:
-        raise RuntimeError(f"Failed to compile regexp: {e}")
+        # Perl dies here with the message the regex engine gave it, and
+        # since that message ends in a newline die adds no location of its
+        # own, leaving a blank line behind it. The wording is the engine's,
+        # so ours differs. $! is 0 at this point, hence the exit code 255.
+        raise StowCLIError(f"Failed to compile regexp: {e}\n", errno=255)
 
     return IgnorePatterns(path_regexp, segment_regexp)
 
@@ -1478,14 +1613,6 @@ _darcs
 ^/LICENSE.*
 ^/COPYING
 """
-    patterns: set[str] = set()
-    for line in default_patterns.strip().split("\n"):
-        line = line.strip()
-        if line.startswith("#") or not line:
-            continue
-        line = re.sub(r"\s+#.+", "", line)
-        line = line.replace("\\#", "#")
-        patterns.add(line)
-
-    patterns.add("^/" + re.escape(LOCAL_IGNORE_FILE) + "$")
-    return _compile_ignore_patterns(patterns)
+    return _compile_ignore_patterns(
+        _parse_ignore_records(default_patterns.strip().split("\n"))
+    )

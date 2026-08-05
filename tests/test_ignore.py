@@ -37,7 +37,7 @@ from testutil import (
 
 LOCAL_IGNORE_FILE = stow_module.LOCAL_IGNORE_FILE
 GLOBAL_IGNORE_FILE = stow_module.GLOBAL_IGNORE_FILE
-_read_ignore_file = stow_module._read_ignore_file
+invalidate_memoized_regexp = stow_module.invalidate_memoized_regexp
 
 
 def check_ignores(stow, stow_path, package, context, tests):
@@ -162,7 +162,7 @@ def do_setup_package_local_list(stow_path, package, contents):
     package_path = join_paths(stow_path, package)
     make_path(package_path)
     package_ignore = setup_package_ignore(package_path, contents)
-    _read_ignore_file.cache_clear()
+    invalidate_memoized_regexp(package_ignore)
     return package_ignore
 
 

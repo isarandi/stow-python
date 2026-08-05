@@ -358,10 +358,14 @@ class TestExpandTilde:
         result = expand_tilde_to_homedir("/a/\\~b")
         assert result == "/a/~b", "middle \\~ unescaped"
 
-    def test_unknown_user_with_escaped_tilde(self, test_env):
-        """~nosuchuser stays literal; \\~ still unescapes afterwards."""
+    def test_unknown_user_with_escaped_tilde(self, test_env, capsys):
+        """An unknown user has no home directory, so Perl substitutes undef
+        as the empty string and warns; \\~ still unescapes afterwards."""
         result = expand_tilde_to_homedir("~nosuchuser-xyzzy/a\\~b")
-        assert result == "~nosuchuser-xyzzy/a~b", "unknown user literal, \\~ unescaped"
+        assert result == "/a~b", "unknown user expands to nothing, \\~ unescaped"
+        assert capsys.readouterr().err.startswith(
+            "Use of uninitialized value in substitution iterator at "
+        )
 
 
 class TestExpansionInRcFile:

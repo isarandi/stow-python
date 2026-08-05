@@ -23,6 +23,8 @@ identically. Tree folding creates a single symlink for an entire directory
 when possible, rather than individual symlinks for each file.
 """
 
+import os
+
 from conftest import (
     check_link,
     check_dir,
@@ -132,3 +134,84 @@ class TestFoldableBoth:
             check,
             compare_fs_ops=True,
         )
+
+    def test_tree_owned_by_package_zero_is_not_foldable(self, stow_env):
+        """foldable() folds only if the common parent is owned by a package,
+        and a package named "0" is false to Perl's test, so the directory
+        stays unfolded."""
+        stow_env.create_package("0", {"bin5/file5a": "content a"})
+        stow_env.create_package("pkg5b", {"bin5/file5b": "content b"})
+
+        def setup():
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "0"])
+            stow_env.run_perl_stow(["-t", stow_env.target_dir, "pkg5b"])
+
+        def check(env):
+            check_dir(env, "bin5")
+            check_link(env, "bin5/file5a", "../../stow/0/bin5/file5a")
+            check_not_exists(env, "bin5/file5b")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "-D", "pkg5b"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
+
+    def test_links_into_package_subdir_zero_count_as_no_links(self, stow_env):
+        """A common parent of "0" is false, so foldable() reports that the
+        directory contains no links and returns before asking who owns it —
+        which is what keeps it from walking into a stow dir named "0"."""
+        stow_env.create_package("pkg6", {"bin6/0/x": "content"})
+
+        def setup():
+            stow_env.create_target_dir("0")
+            with open(os.path.join(stow_env.target_dir, "0", ".stow"), "w"):
+                pass
+            stow_env.create_target_dir("bin6")
+            stow_env.create_target_link("bin6/0", "../../stow/pkg6/bin6/0")
+            stow_env.create_target_link("bin6/f", "0/x")
+
+        def check(env):
+            check_dir(env, "bin6")
+            check_not_exists(env, "bin6/0")
+            check_link(env, "bin6/f", "0/x")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "-D", "pkg6"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
+
+    def test_first_link_without_directory_part_does_not_fix_the_parent(self, stow_env):
+        """foldable() seeds the common parent with the empty string and
+        re-tests for that exact value, so a first link whose destination has
+        no directory part leaves the next link to set it instead of being
+        compared against it."""
+        stow_env.create_package("pkg7", {"bin7/file7": "content"})
+
+        def setup():
+            stow_env.create_target_file("elsewhere/f", "content")
+            stow_env.create_target_dir("bin7")
+            stow_env.create_target_link("bin7/file7", "../../stow/pkg7/bin7/file7")
+            # a resolves through x, whose own destination names a directory
+            stow_env.create_target_link("bin7/a", "x")
+            stow_env.create_target_link("bin7/x", "../elsewhere/f")
+
+        traces = []
+        for run in (stow_env.run_perl_stow, stow_env.run_python_stow):
+            stow_env.reset_target()
+            setup()
+            rc, stdout, stderr = run(["-t", stow_env.target_dir, "-v3", "-D", "pkg7"])
+            assert rc == 0
+            assert stdout == ""
+            traces.append(stderr)
+            check_dir(stow_env, "bin7")
+            check_link(stow_env, "bin7/a", "x")
+            check_not_exists(stow_env, "bin7/file7")
+
+        assert traces[0] == traces[1]
+        assert "            bin7 is not foldable\n" in traces[0]

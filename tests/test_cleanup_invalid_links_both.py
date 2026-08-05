@@ -22,9 +22,11 @@ These tests verify that Perl and Python stow handle invalid/orphaned
 symlinks identically during stow/unstow operations.
 """
 
+import errno
 import os
 
 from conftest import (
+    assert_stow_match,
     check_link,
     check_not_exists,
     run_both_tests,
@@ -123,6 +125,49 @@ class TestCleanupInvalidLinksBoth:
         run_both_tests(
             stow_env,
             ["-t", stow_env.target_dir, "-R", "pkg4"],
+            setup,
+            check,
+            compare_fs_ops=True,
+        )
+
+    def test_foreign_link_to_zero_aborts_cleanup(self, stow_env):
+        """cleanup_invalid_links() calls readlink() directly, so its error
+        for a link pointing at "0" has neither a colon nor the errno text.
+        The abort leaves the package's own links in place."""
+        stow_env.create_package("pkg5", {"a.txt": "content a", "b.txt": "content b"})
+
+        def setup():
+            stow_env.create_target_link("a.txt", "../stow/pkg5/a.txt")
+            stow_env.create_target_link("b.txt", "../stow/pkg5/b.txt")
+            stow_env.create_target_link("x", "0")
+
+        rc, stdout, stderr, state = assert_stow_match(
+            stow_env, ["-t", stow_env.target_dir, "-D", "pkg5"], setup
+        )
+        assert rc == errno.ENOENT
+        assert stdout == ""
+        assert stderr == "stow: ERROR: Could not read link x\n"
+        assert set(state) == {"a.txt", "b.txt", "x"}
+
+    def test_dont_cleanup_dangling_link_owned_by_package_zero(self, stow_env):
+        """A package named "0" is false to Perl's ownership test, so a
+        dangling link into it is not recognised as stow's and survives the
+        clean-up that removes nothing and reports nothing."""
+        stow_env.create_package("0", {"bin6/keep": "content"})
+        stow_env.create_package("pkg6", {"bin6/file6": "content"})
+
+        def setup():
+            stow_env.create_target_dir("bin6")
+            stow_env.create_target_link("bin6/gone", "../../stow/0/bin6/gone")
+            stow_env.create_target_link("bin6/file6", "../../stow/pkg6/bin6/file6")
+
+        def check(env):
+            check_link(env, "bin6/gone", "../../stow/0/bin6/gone")
+            check_not_exists(env, "bin6/file6")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "-D", "pkg6"],
             setup,
             check,
             compare_fs_ops=True,

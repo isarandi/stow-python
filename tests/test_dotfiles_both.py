@@ -261,3 +261,22 @@ class TestUnstowDotfilesBoth:
             check,
             compare_fs_ops=True,
         )
+    def test_dot_entry_with_trailing_newline_keeps_its_name(self, stow_env):
+        """Perl's guard against the "." and ".." entries is /^\\.\\.?$/,
+        whose $ also matches before a trailing newline, so a target entry
+        named ".\\n" is not rewritten to "dot-\\n" and the link survives
+        the unstow."""
+        stow_env.create_package("dotnl", {"dot-\n": "content"})
+
+        def setup():
+            stow_env.create_target_link(".\n", "../stow/dotnl/dot-\n")
+
+        def check(env):
+            check_link(env, ".\n", "../stow/dotnl/dot-\n")
+
+        run_both_tests(
+            stow_env,
+            ["-t", stow_env.target_dir, "--dotfiles", "--compat", "-D", "dotnl"],
+            setup,
+            check,
+        )

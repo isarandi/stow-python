@@ -24,9 +24,11 @@ Tests both Perl and Python implementations via CLI, verifying:
 Based on Perl t/unstow.t
 """
 
+import errno
 import os
 
 from conftest import (
+    assert_stow_match,
     check_dir,
     check_link,
     check_not_exists,
@@ -209,4 +211,51 @@ class TestUnstowBoth:
             check,
             check_on_simulate=False,
             compare_fs_ops=True,
+        )
+
+    def test_unreadable_target_subdir_is_fatal(self, stow_env):
+        """A target subdirectory that cannot be read while unstowing in
+        compat mode is fatal, and the exit status is the errno of the
+        syscall that failed."""
+        stow_env.create_package("pkgperm", {"bin/file": "content"})
+        locked = os.path.join(stow_env.target_dir, "bin")
+
+        def setup():
+            os.makedirs(locked)
+            os.symlink("../../stow/pkgperm/bin/file", os.path.join(locked, "file"))
+            os.chmod(locked, 0o000)
+
+        results = []
+        for run in (stow_env.run_perl_stow, stow_env.run_python_stow):
+            if os.path.exists(locked):
+                os.chmod(locked, 0o755)
+            stow_env.reset_target()
+            setup()
+            try:
+                results.append(run(["-t", stow_env.target_dir, "-D", "-p", "pkgperm"]))
+            finally:
+                os.chmod(locked, 0o755)
+
+        assert results[0] == results[1]
+        rc, stdout, stderr = results[0]
+        assert rc == errno.EACCES
+        assert stdout == ""
+        assert stderr == "stow: ERROR: cannot read directory: bin (Permission denied)\n"
+
+    def test_unstow_over_target_link_to_zero_is_fatal(self, stow_env):
+        """Reading a target link whose destination is "0" fails the same way
+        during unstow, so the whole operation aborts instead of silently
+        doing nothing."""
+        stow_env.create_package("pkgz2", {"link": "content"})
+
+        def setup():
+            stow_env.create_target_link("link", "0")
+
+        rc, stdout, stderr, _ = assert_stow_match(
+            stow_env, ["-t", stow_env.target_dir, "-D", "pkgz2"], setup
+        )
+        assert rc == errno.ENOENT
+        assert stdout == ""
+        assert stderr == (
+            "stow: ERROR: Could not read link: link (No such file or directory)\n"
         )

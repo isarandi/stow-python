@@ -25,7 +25,12 @@ import os
 import shutil
 
 # Import from the stow_python package
-from stow_python.stow import _Stower, _compile_patterns, _read_ignore_file
+from stow_python.stow import (
+    _Stower,
+    _compile_patterns,
+    _read_ignore_file,
+    invalidate_memoized_regexp,
+)
 from stow_python.stow import LOCAL_IGNORE_FILE, GLOBAL_IGNORE_FILE
 from stow_python.types import StowConfig, TaskAction  # noqa: F401
 from stow_python.util import (
@@ -62,6 +67,7 @@ stow_module.expand_environment = expand_environment_variables
 stow_module.expand_tilde = expand_tilde_to_homedir
 stow_module.expand_filepath = expand_filepath
 stow_module._read_ignore_file = _read_ignore_file
+stow_module.invalidate_memoized_regexp = invalidate_memoized_regexp
 
 
 def Stow(*, dir, target, **kwargs):
