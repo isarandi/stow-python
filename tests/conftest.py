@@ -200,8 +200,12 @@ class StowTestEnv:
         stderr_str = stderr.decode("utf-8", errors="replace")
         return proc.returncode, stdout_str, stderr_str
 
-    def run_perl_chkstow(self, args, env=None):
-        """Run Perl chkstow and return (returncode, stdout, stderr)."""
+    def run_perl_chkstow(self, args, env=None, cwd=None):
+        """Run Perl chkstow and return (returncode, stdout, stderr).
+
+        cwd defaults to the target directory; pass a path to run chkstow
+        from somewhere else, which is where the target must be walked from.
+        """
         if PERL_CHKSTOW is None:
             pytest.skip("Perl chkstow not found")
 
@@ -215,7 +219,7 @@ class StowTestEnv:
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            cwd=self.target_dir,
+            cwd=cwd or self.target_dir,
             env=run_env,
         )
         stdout, stderr = proc.communicate()
@@ -223,7 +227,7 @@ class StowTestEnv:
         stderr_str = stderr.decode("utf-8", errors="replace")
         return proc.returncode, stdout_str, stderr_str
 
-    def run_python_chkstow(self, args, env=None):
+    def run_python_chkstow(self, args, env=None, cwd=None):
         """Run Python chkstow and return (returncode, stdout, stderr)."""
         cmd = [sys.executable, PYTHON_CHKSTOW] + list(args)
 
@@ -235,7 +239,7 @@ class StowTestEnv:
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            cwd=self.target_dir,
+            cwd=cwd or self.target_dir,
             env=run_env,
         )
         stdout, stderr = proc.communicate()
@@ -305,10 +309,40 @@ def normalize_newline_warnings(text):
         text,
     )
 
-    # File::Find's "Can't stat" warning ends in a newline BEFORE the
-    # location, so the suffix lands on its own line.
+    # Perl's sprintf warnings name Stow/Util.pm; the Python implementation
+    # names the running script, so only the location is dropped. The quoted
+    # conversion may contain spaces, so it runs to the end of the line.
     text = re.sub(
-        r"(Can't stat [^\n]*)\n at [^\n]+ line \d+\.",
+        r"(Missing argument in sprintf|Invalid conversion in sprintf: [^\n]*?)"
+        r" at [^\n]+ line \d+(?:, <[^>]+> line \d+)?\.$",
+        r"\1",
+        text,
+        flags=re.M,
+    )
+
+    # Getopt::Long's numeric-conversion warning names its own module; the
+    # Python implementation names the running script.
+    text = re.sub(
+        r"(Argument \"[^\"]*\" isn't numeric in addition \(\+\))"
+        r" at [^\n]+ line \d+(?:, <[^>]+> line \d+)?\.",
+        r"\1",
+        text,
+    )
+
+    # Perl's undef warnings name Stow.pm, Stow/Util.pm or the script's own
+    # line; the Python implementation names the running script.
+    text = re.sub(
+        r"(Use of uninitialized value(?: [^\n]*?)? in "
+        r"(?:regexp compilation|join or string|substitution iterator))"
+        r" at [^\n]+ line \d+(?:, <[^>]+> line \d+)?\.",
+        r"\1",
+        text,
+    )
+
+    # File::Find's warnings end in a newline BEFORE the location, so the
+    # suffix lands on its own line.
+    text = re.sub(
+        r"(Can't (?:stat|cd to|opendir\()[^\n]*)\n at [^\n]+ line \d+\.",
         r"\1",
         text,
     )
@@ -387,7 +421,7 @@ def assert_stow_match(stow_env, args, setup_func=None, env=None, ignore_stderr_w
     return perl_rc, perl_stdout, perl_stderr, perl_state
 
 
-def assert_chkstow_match(stow_env, args, setup_func=None, env=None):
+def assert_chkstow_match(stow_env, args, setup_func=None, env=None, cwd=None):
     """
     Run both Perl and Python chkstow with the same args and assert they match.
 
@@ -401,14 +435,15 @@ def assert_chkstow_match(stow_env, args, setup_func=None, env=None):
         args: command line arguments
         setup_func: optional callable to set up target state before each run
         env: optional environment variables
+        cwd: directory to run chkstow from (default: the target directory)
     """
     if setup_func:
         setup_func()
-    perl_rc, perl_stdout, perl_stderr = stow_env.run_perl_chkstow(args, env)
+    perl_rc, perl_stdout, perl_stderr = stow_env.run_perl_chkstow(args, env, cwd)
 
     if setup_func:
         setup_func()
-    python_rc, python_stdout, python_stderr = stow_env.run_python_chkstow(args, env)
+    python_rc, python_stdout, python_stderr = stow_env.run_python_chkstow(args, env, cwd)
 
     # Strip Perl's warn source-location suffixes ("Can't stat ...")
     perl_stderr = normalize_newline_warnings(perl_stderr)
@@ -435,7 +470,115 @@ def assert_chkstow_match(stow_env, args, setup_func=None, env=None):
     return perl_rc, perl_stdout, perl_stderr
 
 
-def assert_chkstow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
+def assert_stow_match_raw(stow_env, args, setup_func=None, env=None):
+    """
+    Run both Perl and Python stow and compare UNDECODED output.
+
+    Filenames are byte strings, so a locale-independent comparison of the
+    raw stdout/stderr is the only way to pin what happens to names that
+    are not valid in the ambient encoding, and in what order they come.
+
+    Returns (returncode, stdout_bytes, stderr_bytes).
+    """
+    if PERL_STOW is None:
+        pytest.skip("Perl stow not found")
+
+    results = []
+    for cmd, perl in (([PERL_STOW], True), ([sys.executable, PYTHON_STOW], False)):
+        stow_env.reset_target()
+        if setup_func:
+            setup_func()
+
+        run_env = os.environ.copy()
+        run_env["STOW_DIR"] = stow_env.stow_dir
+        if perl and PERL_LIB:
+            run_env["PERL5LIB"] = PERL_LIB
+        if env:
+            run_env.update(env)
+
+        proc = subprocess.Popen(
+            cmd + list(args),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=stow_env.stow_dir,
+            env=run_env,
+        )
+        stdout, stderr = proc.communicate()
+        if not perl:
+            stdout = normalize_stow_output(stdout.decode("latin-1")).encode("latin-1")
+            stderr = normalize_stow_output(stderr.decode("latin-1")).encode("latin-1")
+        stderr = normalize_newline_warnings(
+            stderr.decode("latin-1")
+        ).encode("latin-1")
+        results.append((proc.returncode, stdout, stderr))
+
+    (perl_rc, perl_stdout, perl_stderr), (py_rc, py_stdout, py_stderr) = results
+
+    assert perl_rc == py_rc, (
+        "Return code mismatch: Perl=%d, Python=%d\nPerl stderr: %r\nPython stderr: %r"
+        % (perl_rc, py_rc, perl_stderr, py_stderr)
+    )
+    assert perl_stdout == py_stdout, "stdout mismatch:\nPerl: %r\nPython: %r" % (
+        perl_stdout,
+        py_stdout,
+    )
+    assert perl_stderr == py_stderr, "stderr mismatch:\nPerl: %r\nPython: %r" % (
+        perl_stderr,
+        py_stderr,
+    )
+
+    return perl_rc, perl_stdout, perl_stderr
+
+
+def assert_chkstow_match_raw(stow_env, args, env=None, cwd=None):
+    """
+    Run both Perl and Python chkstow and compare UNDECODED output.
+
+    Filenames are byte strings, so a locale-independent comparison of the
+    raw stdout/stderr is the only way to pin what happens to names that
+    are not valid in the ambient encoding.
+
+    Returns (returncode, stdout_bytes, stderr_bytes).
+    """
+    if PERL_CHKSTOW is None:
+        pytest.skip("Perl chkstow not found")
+
+    run_env = os.environ.copy()
+    if env:
+        run_env.update(env)
+    run_cwd = cwd or stow_env.target_dir
+
+    results = []
+    for cmd in (["perl", PERL_CHKSTOW], [sys.executable, PYTHON_CHKSTOW]):
+        proc = subprocess.Popen(
+            cmd + list(args),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=run_cwd,
+            env=run_env,
+        )
+        stdout, stderr = proc.communicate()
+        results.append((proc.returncode, stdout, stderr))
+
+    (perl_rc, perl_stdout, perl_stderr), (py_rc, py_stdout, py_stderr) = results
+
+    assert perl_rc == py_rc, (
+        "Return code mismatch: Perl=%d, Python=%d\nPerl stderr: %r\nPython stderr: %r"
+        % (perl_rc, py_rc, perl_stderr, py_stderr)
+    )
+    assert perl_stdout == py_stdout, "stdout mismatch:\nPerl: %r\nPython: %r" % (
+        perl_stdout,
+        py_stdout,
+    )
+    assert perl_stderr == py_stderr, "stderr mismatch:\nPerl: %r\nPython: %r" % (
+        perl_stderr,
+        py_stderr,
+    )
+
+    return perl_rc, perl_stdout, perl_stderr
+
+
+def assert_chkstow_match_with_fs_ops(stow_env, args, setup_func=None, env=None, cwd=None):
     """
     Run both Perl and Python chkstow, comparing outputs AND filesystem operations.
 
@@ -443,9 +586,11 @@ def assert_chkstow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
     """
     import tempfile
 
+    run_cwd = cwd or stow_env.target_dir
+
     # Check if strace is available
     if shutil.which('strace') is None:
-        return assert_chkstow_match(stow_env, args, setup_func, env)
+        return assert_chkstow_match(stow_env, args, setup_func, env, cwd)
 
     tmpdir = stow_env.tmpdir
 
@@ -462,7 +607,7 @@ def assert_chkstow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
         perl_strace_file = f.name
 
     perl_rc, perl_stdout, perl_stderr = run_with_strace(
-        perl_cmd, stow_env.target_dir, run_env, perl_strace_file
+        perl_cmd, run_cwd, run_env, perl_strace_file
     )
     perl_ops = parse_strace_output(perl_strace_file, tmpdir=tmpdir)
 
@@ -479,7 +624,7 @@ def assert_chkstow_match_with_fs_ops(stow_env, args, setup_func=None, env=None):
         python_strace_file = f.name
 
     python_rc, python_stdout, python_stderr = run_with_strace(
-        python_cmd, stow_env.target_dir, run_env, python_strace_file
+        python_cmd, run_cwd, run_env, python_strace_file
     )
     python_ops = parse_strace_output(python_strace_file, tmpdir=tmpdir)
 
@@ -602,7 +747,7 @@ def run_python_and_check(env, args, check_func, env_vars=None):
 
 
 def run_both_tests(env, args, setup_func, check_func=None, check_on_simulate=False,
-                   compare_fs_ops=False, check_func_posixly=None):
+                   compare_fs_ops=False, check_func_posixly=None, env_vars=None):
     """
     Run comprehensive oracle test with both execute and simulate modes.
 
@@ -621,6 +766,7 @@ def run_both_tests(env, args, setup_func, check_func=None, check_on_simulate=Fal
         check_func_posixly: behavioral assertions for the POSIXLY_CORRECT
             pass, when the expected outcome differs there (e.g. + options
             are disabled and become package names); defaults to check_func
+        env_vars: extra environment variables for every run
     """
     # Run tests in both POSIXLY_CORRECT modes
     for posixly_correct in [False, True]:
@@ -629,17 +775,19 @@ def run_both_tests(env, args, setup_func, check_func=None, check_on_simulate=Fal
             mode_check = check_func_posixly
         _run_both_tests_impl(
             env, args, setup_func, mode_check, check_on_simulate,
-            compare_fs_ops, posixly_correct
+            compare_fs_ops, posixly_correct, env_vars
         )
 
 
 def _run_both_tests_impl(env, args, setup_func, check_func, check_on_simulate,
-                         compare_fs_ops, posixly_correct):
+                         compare_fs_ops, posixly_correct, env_vars=None):
     """
     Internal implementation of run_both_tests for a specific POSIXLY_CORRECT setting.
     """
     # Set up environment for this run
     extra_env = {"POSIXLY_CORRECT": ""} if posixly_correct else {}
+    if env_vars:
+        extra_env.update(env_vars)
 
     # Determine args for both modes
     args_execute = list(args)

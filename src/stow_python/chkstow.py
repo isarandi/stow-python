@@ -25,9 +25,14 @@ class Mode(Enum):
 _stow_dir_env = os.environ.get("STOW_DIR")
 DEFAULT_TARGET = "/usr/local/" if _stow_dir_env in (None, "", "0") else _stow_dir_env
 
+# Perl: $File::Find::current_dir, i.e. File::Spec->curdir
+_CURRENT_DIR = "."
+
 
 def main() -> None:
     """Main entry point."""
+    _make_streams_byte_transparent()
+
     if len(sys.argv) == 1:
         usage()
 
@@ -43,6 +48,18 @@ def main() -> None:
         case Mode.LIST:
             for pkg in list_packages(target):
                 print(pkg)
+
+
+def _make_streams_byte_transparent() -> None:
+    """Let filenames reach the streams as the raw bytes Perl prints.
+
+    Filenames are decoded with surrogateescape, so encoding the output
+    with the same error handler puts the original bytes back on the wire
+    whatever the locale says.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="surrogateescape")
 
 
 # Option table mirroring Perl chkstow's GetOptions() spec
@@ -81,40 +98,55 @@ def parse_args(args: list[str]) -> tuple[str, Mode]:
         if arg == "--":
             break
         if arg.startswith("--"):
-            name = arg[2:]
-        elif len(arg) > 1 and (
-            arg.startswith("-") or (arg.startswith("+") and not posixly_correct)
-        ):
-            name = arg[1:]
+            starter, name = "--", arg[2:]
+            long_prefix = True
+        elif arg.startswith("-") and arg != "-":
+            starter, name = "-", arg[1:]
+            long_prefix = False
+        elif arg.startswith("+") and not posixly_correct:
+            starter, name = "+", arg[1:]
+            long_prefix = False
         else:
             if posixly_correct:
                 break
             i += 1
             continue
 
+        # An "=" separates the value only under a long prefix, or under a
+        # short one while getopt_compat is on, which POSIXLY_CORRECT turns
+        # off — "-t=x" is then the unknown option "t=x". At least one name
+        # character has to precede it, so "--=x" is the option "=x".
         attached: str | None = None
-        if "=" in name and not name.startswith("="):
-            name, attached = name.split("=", 1)
+        equals = name.find("=", 1)
+        if (long_prefix or not posixly_correct) and equals > 0:
+            name, attached = name[:equals], name[equals + 1 :]
 
-        spec = _find_option(name, allow_abbrev=not posixly_correct)
+        given, spec = _find_option(name, allow_abbrev=not posixly_correct)
         if spec is None:
-            print(f"Unknown option: {name}", file=sys.stderr)
+            # A prefix with nothing behind it is not an unknown option but
+            # a missing one; only "+" gets that far, since "-" alone is a
+            # non-option argument and "--" ends the options
+            if given:
+                print(f"Unknown option: {given}", file=sys.stderr)
+            else:
+                print(f"Missing option after {starter}", file=sys.stderr)
             ok = False
         else:
             _, spec_mode = spec
             if spec_mode is not None:
                 if attached is not None:
-                    print(f"Option {name} does not take an argument", file=sys.stderr)
+                    print(f"Option {given} does not take an argument", file=sys.stderr)
                     ok = False
                 else:
                     mode = spec_mode
-            elif attached is not None:
+            elif attached:
                 target = attached
-            elif i + 1 < len(args):
+            elif attached is None and i + 1 < len(args):
                 i += 1
                 target = args[i]
             else:
-                print(f"Option {name} requires an argument", file=sys.stderr)
+                # An empty attached value counts as no argument at all
+                print(f"Option {given} requires an argument", file=sys.stderr)
                 ok = False
         i += 1
 
@@ -126,23 +158,35 @@ def parse_args(args: list[str]) -> tuple[str, Mode]:
 
 def _find_option(
     name: str, allow_abbrev: bool
-) -> tuple[tuple[str, ...], Mode | None] | None:
-    """Resolve an option name like Getopt::Long's default find_option: an
-    exact match on a name or alias wins, else a unique prefix resolves,
-    both case-insensitively. Returns the matching spec, or None if the
-    option is unknown. (No prefix is ambiguous between two of chkstow's
-    specs, so there is no ambiguity error path.)
+) -> tuple[str, tuple[tuple[str, ...], Mode | None] | None]:
+    """Resolve an option name like Getopt::Long's default find_option.
+
+    An exact match on a name or alias wins, else a unique prefix resolves,
+    both case-insensitively. Returns (name_for_messages, spec), with the
+    spec None when the option is unknown. Getopt::Long names a known option
+    by the lowercased, prefix-expanded name it resolved to, and an unknown
+    one by the name as it stood when the lookup gave up — which
+    auto_abbrev has already lowercased and POSIXLY_CORRECT has not. (No
+    prefix is ambiguous between two of chkstow's specs, so there is no
+    ambiguity error path.)
     """
+    given = name.lower() if allow_abbrev else name
     folded = name.lower()
     for spec in _OPTION_SPECS:
         if folded in spec[0]:
-            return spec
+            return folded, spec
     if not allow_abbrev or not folded:
-        return None
+        return given, None
     hits = [
-        spec for spec in _OPTION_SPECS if any(n.startswith(folded) for n in spec[0])
+        (n, spec)
+        for spec in _OPTION_SPECS
+        for n in spec[0]
+        if n.startswith(folded)
     ]
-    return hits[0] if len(hits) == 1 else None
+    if len(hits) != 1:
+        return given, None
+    expanded, spec = hits[0]
+    return expanded, spec
 
 
 def usage() -> None:
@@ -184,7 +228,8 @@ def list_packages(target: str) -> list[str]:
         dest = re.sub(r"/.*", "", dest)
         packages.add(dest)
 
-    return sorted(packages - {"", ".."})
+    # Perl sorts the package names as byte strings
+    return sorted(packages - {"", ".."}, key=os.fsencode)
 
 
 def _bad_links_wanted(entry: str, full_path: str, is_link: bool) -> str | None:
@@ -219,7 +264,10 @@ def _walk_target(target: str, wanted) -> Iterator[str]:
     """Walk target directory, calling wanted callback for each entry.
 
     Matches Perl's File::Find behavior with chdir and relative paths.
-    wanted(entry, full_path) is called with cwd set to entry's directory.
+    wanted(entry, full_path) is called with cwd set to entry's directory,
+    so the walk happens inside the target tree, not inside the cwd stow
+    was started from. The paths handed to wanted() keep the target
+    spelling as given on the command line.
     """
     # File::Find saves cwd at start and returns to it at end
     start_cwd = os.getcwd()
@@ -230,7 +278,14 @@ def _walk_target(target: str, wanted) -> Iterator[str]:
         # " at <script> line N." source location, which the test harness
         # normalizes away like the other Perl warning locations.
         print(f"Can't stat {target}: {e.strerror}", file=sys.stderr)
+        os.chdir(start_cwd)
         return
+
+    # File::Find strips ONE trailing slash from the top-level argument
+    # unless the argument is the root directory, so "-t dir/" reports
+    # "dir/x" while "-t dir//" reports "dir//x".
+    if target.endswith("/") and not _is_root(target):
+        target = target[:-1]
 
     # File::Find does NOT descend a top-level argument that is not a
     # directory (note: a symlink to a directory is still a symlink here).
@@ -253,23 +308,32 @@ def _walk_target(target: str, wanted) -> Iterator[str]:
         os.chdir(start_cwd)
         return
 
-    # Perl lstats the initial (directory) target twice
-    os.lstat(target)
+    # File::Find's _find_dir chdirs into the top directory before reading
+    # it; "." is already the cwd, so it is left alone. A failed chdir
+    # warns without the parenthesised parent that deeper failures carry,
+    # and checks nothing.
+    if target != _CURRENT_DIR:
+        try:
+            os.chdir(target)
+        except OSError as e:
+            print(f"Can't cd to {target}: {e.strerror}", file=sys.stderr)
+            os.chdir(start_cwd)
+            return
 
-    # Track depth for multi-level chdir back
-    final_depth = 0
-    for result, result_depth in _file_find_chdir(target, "", wanted, depth=1):
-        final_depth = result_depth
+    for result, _result_depth in _file_find_chdir(target, wanted, depth=1):
         if result is not None:
             yield result
 
     # Final chdir back to saved cwd (Perl uses absolute path from getcwd)
-    if final_depth > 0:
-        os.chdir(start_cwd)
+    os.chdir(start_cwd)
 
 
-def _file_find_chdir(target: str, prefix: str, wanted, depth: int = 1) -> Iterator[tuple[str, int]]:
+def _file_find_chdir(dir_name: str, wanted, depth: int = 1) -> Iterator[tuple[str, int]]:
     """Recursive File::Find-like walker using chdir and relative paths.
+
+    The cwd is the directory being read; dir_name is that directory's path
+    as File::Find spells it ($File::Find::dir), which is what the entries'
+    names are built from.
 
     Matches Perl's File::Find syscall pattern exactly:
     - open(".") to read current directory
@@ -284,22 +348,27 @@ def _file_find_chdir(target: str, prefix: str, wanted, depth: int = 1) -> Iterat
     Yields (result, depth_after) tuples. depth_after indicates how deep we are
     after processing, so caller can do multi-level chdir.
     """
-    # File::Find calls wanted on the root directory only (depth 1)
+    # File::Find calls wanted on the root directory only (depth 1); deeper
+    # directories get their call from the loop below, before descending.
     if depth == 1:
-        dir_full_path = target + "/" + prefix if prefix else target
-        wanted(".", dir_full_path, False)  # "." is not a symlink
+        st = os.lstat(_CURRENT_DIR)
+        wanted(_CURRENT_DIR, dir_name, stat.S_ISLNK(st.st_mode))
+
+    # Entry names hang off the directory path, which only ends in a slash
+    # of its own when it is the root directory.
+    dir_pref = dir_name if _is_root(dir_name) else dir_name + "/"
 
     # Open and read current directory entries (Perl uses ".")
     try:
         entries = os.listdir(".")
-    except OSError:
+    except OSError as e:
+        print(f"Can't opendir({dir_name}): {e.strerror}", file=sys.stderr)
         return
 
     # preprocess: stat .stow and .notstowed (Perl's -e test)
     if _path_exists(".stow") or _path_exists(".notstowed"):
         # Perl outputs $File::Find::dir which is the full path from start
-        skip_path = target + "/" + prefix if prefix else target
-        print(f"skipping {skip_path}", file=sys.stderr)
+        print(f"skipping {dir_name}", file=sys.stderr)
         return
 
     # Process entries - Perl handles links immediately, defers dirs
@@ -314,8 +383,7 @@ def _file_find_chdir(target: str, prefix: str, wanted, depth: int = 1) -> Iterat
         is_link = stat.S_ISLNK(st.st_mode)
 
         # Build full path (Perl's $File::Find::name)
-        full_path = os.path.join(prefix, entry) if prefix else entry
-        full_path = target + "/" + full_path
+        full_path = dir_pref + entry
 
         if is_dir:
             # Dirs: just collect for later recursion
@@ -339,11 +407,20 @@ def _file_find_chdir(target: str, prefix: str, wanted, depth: int = 1) -> Iterat
         os.lstat(subdir)  # Second lstat happens here, before chdir
         # Call wanted for dirs - generates stat for -d test
         wanted(subdir, subdir_full_path, False)
-        os.chdir(subdir)
+        try:
+            os.chdir(subdir)
+        except OSError as e:
+            # File::Find names the parent in parentheses here, printing it
+            # empty when the parent is the root directory.
+            parent_in_msg = "" if _is_root(dir_name) else dir_name
+            print(
+                f"Can't cd to ({parent_in_msg}/) {subdir}: {e.strerror}",
+                file=sys.stderr,
+            )
+            continue
         current_depth += 1
-        new_prefix = os.path.join(prefix, subdir) if prefix else subdir
 
-        for result, result_depth in _file_find_chdir(target, new_prefix, wanted, current_depth):
+        for result, result_depth in _file_find_chdir(subdir_full_path, wanted, current_depth):
             yield result, result_depth
             current_depth = result_depth
 
@@ -353,6 +430,11 @@ def _file_find_chdir(target: str, prefix: str, wanted, depth: int = 1) -> Iterat
         pass
     # Yield a sentinel to communicate final depth (None result)
     yield None, current_depth
+
+
+def _is_root(path: str) -> bool:
+    """Perl File::Find's _is_root: the Unix root directory, nothing else."""
+    return path == "/"
 
 
 def _path_exists(path: str) -> bool:
