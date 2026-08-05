@@ -72,6 +72,12 @@ def file_tree_st(draw, max_depth=3, max_files=10):
             st.lists(path_component_st, min_size=depth, max_size=depth, unique=True)
         )
         if components:
+            # One path in twenty gains a ".."-prefixed leading component:
+            # Perl's join_paths regex cannot collapse such names (its
+            # lookahead checks two characters), and this branch replicates
+            # that bug, so behavior must still match byte-for-byte.
+            if draw(st.integers(min_value=0, max_value=19)) == 0:
+                components[0] = ".." + components[0]
             path = "/".join(components)
 
             # Skip if this path is already a directory prefix
@@ -103,6 +109,11 @@ def package_set_st(draw, max_packages=4):
     names = draw(
         st.lists(name_st, min_size=num_packages, max_size=num_packages, unique=True)
     )
+    # One draw in ten swaps a name for "0": Perl treats the string "0" as
+    # false in ownership and folding checks, and this branch replicates
+    # that bug, so behavior must still match byte-for-byte.
+    if draw(st.integers(min_value=0, max_value=9)) == 0 and "0" not in names:
+        names[-1] = "0"
     packages = {}
     for name in names:
         packages[name] = draw(file_tree_st(max_depth=2, max_files=5))
