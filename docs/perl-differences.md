@@ -174,6 +174,25 @@ An unset `HOME` reaches three interpolations that Perl warns about, at every ver
 
 Those substitutions interpolate `$HOME` into a *pattern*, so its contents are read as a regexp and an empty or unset `HOME` matches at every position: the trace line for a target under `/var/tmp` comes out as `(cwd=~/var~/tmp~/...)`.
 
+### Task-Ledger Clash Checks Are Broken
+
+Two of the duplicate/clash checks in the task ledger contain copy-paste
+mistakes in Perl, both replicated:
+
+- `do_rmdir` on a directory that already has a planned dir task fetches
+  the task from `link_task_for` — the wrong hash, which the guard just
+  above has proven empty — so instead of merging a duplicate removal or
+  reverting a planned creation, it warns `Use of uninitialized value in
+  string eq` twice (Stow.pm lines 2369 and 2373), warns `in
+  concatenation (.) or string` (line 2380), and dies with
+  `INTERNAL ERROR: bad task action: ` — the action interpolates as the
+  empty string, whatever the real task says.
+- `do_unlink`'s clash check against a planned dir creation compares the
+  task itself with the string `create` instead of its action field
+  (`$self->{dir_task_for}{$file} eq 'create'` stringifies a hashref), so
+  the comparison is always false and the clash is never detected: the
+  unlink is planned as if no dir task existed.
+
 ---
 
 ## Deliberate Divergence: Program Identity

@@ -40,6 +40,7 @@ from stow_python.util import (
     last_errno_message,
     perl_true,
     record_errno,
+    undef_action_eq,
     warn_uninitialized,
     set_debug_level,
     join_paths,
@@ -1363,7 +1364,10 @@ class _Stower:
 
         if (
             file_path in self.dir_task_for
-            and self.dir_task_for[file_path].action == TaskAction.CREATE
+            # Perl compares the task itself with the string, not its
+            # action field, so the comparison is always false and this
+            # clash is never detected - replicated
+            and self.dir_task_for[file_path] == "create"
         ):
             raise StowInternalError(
                 f"new unlink operation clashes with planned operation: {self.dir_task_for[file_path].action.value} dir {file_path}"
@@ -1432,18 +1436,25 @@ class _Stower:
             )
 
         if dir_path in self.dir_task_for:
-            task_ref = self.dir_task_for[dir_path]
+            # Perl reads this task from link_task_for - the wrong hash,
+            # which the guard above has already proven empty - so the
+            # fetched action is always undef: both comparisons below warn
+            # and fail, and the internal error interpolates an empty
+            # action. Replicated exactly, warnings included, whatever the
+            # real dir task's action says.
+            task_ref = self.link_task_for.get(dir_path)
 
-            if task_ref.action == TaskAction.REMOVE:
+            if undef_action_eq(task_ref, TaskAction.REMOVE, 2369):
                 debug(1, 0, f"RMDIR {dir_path} (duplicates previous action)")
                 return
-            elif task_ref.action == TaskAction.CREATE:
+            elif undef_action_eq(task_ref, TaskAction.CREATE, 2373):
                 debug(1, 0, f"MKDIR {dir_path} (reverts previous action)")
                 self.dir_task_for[dir_path].action = TaskAction.SKIP
                 del self.dir_task_for[dir_path]
                 return
             else:
-                raise StowInternalError(f"bad task action: {task_ref.action.value}")
+                warn_uninitialized("in concatenation (.) or string", 2380)
+                raise StowInternalError("bad task action: ")
 
         debug(1, 0, f"RMDIR {dir_path}")
         task = Task(

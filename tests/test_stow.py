@@ -22,6 +22,8 @@ Test stowing packages - Python port of stow.t
 import os
 import re
 
+import pytest
+
 from testutil import (
     count_conflicts,
     new_Stow,
@@ -556,3 +558,68 @@ class TestStow:
 
         check_no_folding("a")
         check_no_folding("b")
+
+
+class TestDoRmdirTaskClash:
+    """_do_rmdir on a directory that already has a planned dir task.
+
+    Perl fetches the task from link_task_for - the wrong hash, which the
+    guard just above has proven empty for this path - so the fetched
+    value is always undef: instead of merging a duplicate removal or
+    reverting a planned creation, both action comparisons warn about the
+    uninitialized value and control falls through to the internal error
+    with an empty action interpolated. Replicated exactly, whatever the
+    real task's action says.
+    """
+
+    def test_planned_dir_task_dies_with_bad_task_action(self, stow_test_env, capsys):
+        from stow_python.types import StowInternalError, Task, TaskAction, TaskType
+
+        stow = new_Stow(dir="../stow")
+        make_path("../stow/pkg")
+
+        task = Task(
+            action=TaskAction.REMOVE, type=TaskType.DIR, path="somedir", source=""
+        )
+        stow.dir_task_for["somedir"] = task
+        stow.tasks = [task]
+
+        with pytest.raises(StowInternalError) as excinfo:
+            stow._do_rmdir("somedir")
+        assert str(excinfo.value) == "bad task action: "
+
+        err = capsys.readouterr().err
+        assert err.count("Use of uninitialized value in string eq") == 2
+        assert "line 2369." in err and "line 2373." in err
+        assert "Use of uninitialized value in concatenation (.) or string" in err
+        assert "line 2380." in err
+        assert "somedir" in stow.dir_task_for, "the planned task is never merged"
+
+
+class TestDoUnlinkDeadDirClashGuard:
+    """_do_unlink with a planned dir-create task for the same path.
+
+    Perl compares the task itself with the string 'create', not its
+    action field, so the clash guard is dead code: the unlink is planned
+    as if no dir task existed. Replicated - the guard never raises.
+    """
+
+    def test_planned_dir_create_is_not_detected(self, stow_test_env):
+        from stow_python.types import Task, TaskAction, TaskType
+
+        stow = new_Stow(dir="../stow")
+        make_path("../stow/pkg")
+        make_file("../stow/pkg/somefile")
+        make_link("somefile", "../stow/pkg/somefile")
+
+        task = Task(
+            action=TaskAction.CREATE, type=TaskType.DIR, path="somefile", source=""
+        )
+        stow.dir_task_for["somefile"] = task
+        stow.tasks = [task]
+
+        stow._do_unlink("somefile")
+        assert any(
+            t.action == TaskAction.REMOVE and t.path == "somefile"
+            for t in stow.tasks
+        ), "the unlink is planned as if no dir task existed"

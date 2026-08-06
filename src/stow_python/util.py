@@ -310,6 +310,19 @@ def warn_uninitialized(context: str, line: int) -> None:
     )
 
 
+def undef_action_eq(task_ref, action, line: int) -> bool:
+    """Perl's `$task_ref->{action} eq '...'` when task_ref may be undef.
+
+    Dereferencing undef in rvalue context yields undef, and comparing
+    undef with `eq` warns "Use of uninitialized value in string eq" and
+    is false; `line` is the Perl source line the warning names.
+    """
+    if task_ref is None:
+        warn_uninitialized("in string eq", line)
+        return False
+    return task_ref.action == action
+
+
 # Line of the "| Joining: @paths" interpolation in Stow/Util.pm, which is
 # where an undef path warns.
 _JOIN_PATHS_WARN_LINE = 171
