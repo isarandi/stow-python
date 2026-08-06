@@ -2999,7 +2999,9 @@ def get_config_file_options():
         except OSError as e:
             _last_errno = e.errno
             continue
-        if not stat.S_ISREG(st.st_mode) or not is_readable_by_effective_uid(st):
+        # Perl's -r is only an access test: a readable DIRECTORY passes it
+        # and reaches the open
+        if not is_readable_by_effective_uid(st):
             continue
         try:
             # newline='\n' splits lines exactly like Perl's <$FILE> (on
@@ -3012,9 +3014,18 @@ def get_config_file_options():
                     if line.endswith('\n'):
                         line = line[:-1]
                     defaults.extend(perl_shellwords(line))
-        except IOError:
+        except EnvironmentError as e:
+            if e.errno == errno_module.EISDIR:
+                # Perl's open succeeds on a directory; the read then fails
+                # with EISDIR (setting $!), the loop reads nothing, and
+                # close reports the pending error - a bare die whose exit
+                # code is $!
+                sys.stderr.write("Could not close open file: %s\n" % file_path)
+                sys.exit(e.errno)
+            # A failed open is Perl's other bare die in this loop, again
+            # exiting with $!
             sys.stderr.write("Could not open %s for reading\n" % file_path)
-            sys.exit(1)
+            sys.exit(e.errno if e.errno else 255)
 
     # Parse the options
     rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow = parse_options(defaults)

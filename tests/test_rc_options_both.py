@@ -227,6 +227,15 @@ class TestRcOptionsBoth:
             compare_fs_ops=False,
         )
 
+    def test_stowrc_directory_dies_at_close(self, stow_env):
+        """A directory named .stowrc passes Perl's -r and reaches the open;
+        the read fails with EISDIR, the close reports it, and the bare die
+        exits with $! (21)."""
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        os.makedirs(os.path.join(stow_env.stow_dir, ".stowrc"))
+
+        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "pkg"])
+
     def test_stowrc_brace_without_variable_name_stays_literal(self, stow_env):
         """A brace group that is not a bare variable name is left as it is."""
         stow_env.create_package("pkg", {"bin/file": "content"})
