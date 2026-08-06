@@ -562,6 +562,18 @@ already has a real `..d` directory.
 | Perl | Fails to recognize the symlink it created itself: a second `stow` reports `existing target is not owned by stow: ..d/f1` (exit 1), and unstowing refuses to remove it |
 | Python | Recognizes its own link; restow is idempotent (exit 0) and unstow removes it |
 
+The same recognition failure surfaces in conflict wording when a *second*
+package contains the same `..`-prefixed path: both implementations abort
+with exit 1, but Perl's conflict bullet says
+`existing target is not owned by stow: ..d/f1` while ours correctly names
+the owner: `existing target is stowed to a different package: ..d/f1 =>
+../../stow/pkg1/..d/f1`. Perl may also report the conflict at a shallower
+path than we do — it stops at the folded directory it cannot recognize,
+while we descend into it and report the conflicting files within. And
+because `bin/stow` sorts each warning's conflict messages
+lexicographically, the different wording also changes the order in which
+the bullets print.
+
 **Note:** This is a Perl bug we intentionally do not replicate — an
 implementation that cannot recognize its own symlinks cannot manage them.
 A related quirk of the same regex is not replicated either: Perl's `$`
@@ -633,9 +645,16 @@ The hypothesis-based oracle tests (`tests/test_oracle_hypothesis.py`) filter out
 - A package named `.stowrc` is filtered: the runs use the stow dir as their
   working directory, so it would make `./.stowrc` a directory — divergence
   #20, already pinned by its own test
-- A package named `0` is filtered: Perl's string-`"0"` falsiness stops it
-  from recognizing that package as a link's owner — divergence #25,
-  already pinned by its own tests
+- A package named `0` (#25) and path components starting with `..` (#29)
+  are NOT filtered — the strategies deliberately inject them at a fixed
+  rate (one package set in ten gets a `0` package, one path in twenty a
+  `..`-prefixed component) so every run exercises these corners — and a
+  resulting mismatch is accepted only when it matches the documented
+  divergence's exact signature (`_matches_documented_divergence` in
+  `tests/test_oracle_hypothesis.py`); any other mismatch still fails. The
+  one exception is the verbose-output property, which assumes both
+  triggers away because #25 and #29 alter the verbose trace itself with
+  no tight signature to check against
 
 These filters ensure the oracle tests focus on behavioral equivalence for realistic inputs rather than obscure edge cases where Perl has bugs or undefined behavior.
 
