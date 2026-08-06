@@ -65,7 +65,7 @@ else:
 # ---------------------------------------------------------------------------
 
 
-def bad_links_wanted(entry, full_path, is_link):
+def bad_links(entry, full_path, is_link):
     """Perl: -l && !-e && print"""
     # Perl's -l uses cached stat from File::Find, so no extra lstat
     # Perl's !-e does stat to check if target exists
@@ -73,7 +73,7 @@ def bad_links_wanted(entry, full_path, is_link):
         print("Bogus link: %s" % full_path)
 
 
-def aliens_wanted(entry, full_path, is_link):
+def aliens(entry, full_path, is_link):
     """Perl: !-l && !-d && print"""
     # Perl short-circuits: if -l is true, -d is not evaluated
     if is_link:
@@ -84,7 +84,7 @@ def aliens_wanted(entry, full_path, is_link):
         print("Unstowed file: %s" % full_path)
 
 
-def list_wanted(entry, full_path, is_link):
+def list_pkg(entry, full_path, is_link):
     """Perl: -l && readlink"""
     if is_link:
         link_dest = os.readlink(entry)
@@ -93,6 +93,20 @@ def list_wanted(entry, full_path, is_link):
         # Remove everything after first /
         link_dest = re.sub(r'/.*', '', link_dest)
         Package[link_dest] = 1
+
+
+def skip_dirs(entries, dir_full_path):
+    """Perl's File::Find preprocess hook: skip stow source and unstowed targets.
+
+    Perl receives the directory's entries in @_ and returns the ones the
+    walk should visit, naming the directory via the $File::Find::dir
+    global; here that directory is passed in instead.
+    """
+    if _path_exists(".stow") or _path_exists(".notstowed"):
+        sys.stderr.write("skipping %s\n" % dir_full_path)
+        return []
+    else:
+        return entries
 
 
 # ---------------------------------------------------------------------------
@@ -120,11 +134,12 @@ def _path_exists(path):
         return False
 
 
-def _walk_target(target, wanted):
+def _walk_target(target, wanted, preprocess):
     """Walk target directory, calling wanted callback for each entry.
 
     Matches Perl's File::Find behavior with chdir and relative paths.
-    wanted(entry, full_path, is_link) is called with cwd set to entry's directory.
+    wanted(entry, full_path, is_link) is called with cwd set to entry's
+    directory; preprocess(entries, dir) filters each directory's entries.
     """
     # File::Find saves cwd at start and returns to it at end
     start_cwd = os.getcwd()
@@ -185,19 +200,19 @@ def _walk_target(target, wanted):
     # Perl lstats the directory again for the wanted function's -l test
     os.lstat(".")
 
-    for _depth in _file_find_chdir(target, "", wanted, 1):
+    for _depth in _file_find_chdir(target, "", wanted, preprocess, 1):
         pass
 
     # Final chdir back to saved cwd (Perl uses absolute path from getcwd)
     os.chdir(start_cwd)
 
 
-def _file_find_chdir(target, prefix, wanted, depth):
+def _file_find_chdir(target, prefix, wanted, preprocess, depth):
     """Recursive File::Find-like walker using chdir and relative paths.
 
     Matches Perl's File::Find syscall pattern exactly:
     - open(".") to read current directory
-    - stat .stow/.notstowed (preprocess)
+    - preprocess the entries (stats .stow/.notstowed)
     - For each entry: lstat to get type
       - If link: lstat again + readlink in wanted
       - If dir: just lstat (second lstat happens before chdir)
@@ -227,10 +242,9 @@ def _file_find_chdir(target, prefix, wanted, depth):
         sys.stderr.write("Can't opendir(%s): %s\n" % (dir_full_path, e.strerror))
         return
 
-    # preprocess: stat .stow and .notstowed (Perl's -e test)
-    if _path_exists(".stow") or _path_exists(".notstowed"):
-        sys.stderr.write("skipping %s\n" % dir_full_path)
-        return
+    # Perl's File::Find hands the entries to the preprocess hook and walks
+    # only what comes back
+    entries = preprocess(entries, dir_full_path)
 
     # Process entries - Perl handles links immediately, defers dirs
     subdirs = []
@@ -288,7 +302,8 @@ def _file_find_chdir(target, prefix, wanted, depth):
         else:
             new_prefix = subdir
 
-        for result_depth in _file_find_chdir(target, new_prefix, wanted, current_depth):
+        for result_depth in _file_find_chdir(target, new_prefix, wanted,
+                                             preprocess, current_depth):
             if result_depth is not None:
                 current_depth = result_depth
 
@@ -297,44 +312,18 @@ def _file_find_chdir(target, prefix, wanted, depth):
 
 
 def check_stow():
-    """Walk target directory and apply the Wanted function."""
-    global Wanted
+    """Walk target directory and apply the Wanted function.
 
-    # Map old-style callbacks to new File::Find-style wanted functions
-    if Wanted == bad_links:
-        _walk_target(Target, bad_links_wanted)
-    elif Wanted == aliens:
-        _walk_target(Target, aliens_wanted)
-    elif Wanted == list_pkg:
-        _walk_target(Target, list_wanted)
-        # Print collected packages
+    Perl: find({wanted => $Wanted, preprocess => \\&skip_dirs}, $Target)
+    """
+    _walk_target(Target, Wanted, skip_dirs)
+
+    if Wanted == list_pkg:
         Package.pop('', None)
         Package.pop('..', None)
         if Package:
             for pkg in sorted(Package.keys(), key=BYTE_ORDER_KEY):
                 print(pkg)
-
-
-# Legacy callbacks for compatibility (used as identity markers in check_stow)
-def bad_links(path):
-    """Check for symlinks that point to non-existent files."""
-    if os.path.islink(path) and not os.path.exists(path):
-        print("Bogus link: %s" % path)
-
-
-def aliens(path):
-    """Check for files that are not symlinks or directories."""
-    if not os.path.islink(path) and not os.path.isdir(path):
-        print("Unstowed file: %s" % path)
-
-
-def list_pkg(path):
-    """Extract package name from symlink and record it."""
-    if os.path.islink(path):
-        link_dest = os.readlink(path)
-        link_dest = re.sub(r'^(?:\.\./)+stow/', '', link_dest)
-        link_dest = re.sub(r'/.*', '', link_dest)
-        Package[link_dest] = 1
 
 
 # Option table mirroring Perl chkstow's GetOptions() spec

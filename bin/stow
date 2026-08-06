@@ -1674,7 +1674,7 @@ class Stow(object):
                 debug(5, 1, "%s didn't exist" % file_path)
 
         debug(4, 1, "Using built-in ignore list")
-        return self.get_default_global_ignore_regexps()
+        return DEFAULT_GLOBAL_IGNORE_REGEXPS
 
     def get_ignore_regexps_from_file(self, file_path):
         """Get ignore regexps from a file, with memoization."""
@@ -1780,47 +1780,10 @@ class Stow(object):
         be an old version missing the entries we need. So we make sure
         they are there by hardcoding some crucial entries.
         """
-        # Default ignore patterns from Stow.pm __DATA__ section
-        default_patterns = """
-# Comments and blank lines are allowed.
-
-RCS
-.+,v
-
-CVS
-\\.\\#.+       # CVS conflict files / emacs lock files
-\\.cvsignore
-
-\\.svn
-_darcs
-\\.hg
-
-\\.git
-\\.gitignore
-\\.gitmodules
-
-.+~          # emacs backup files
-\\#.*\\#       # emacs autosave files
-
-^/README.*
-^/LICENSE.*
-^/COPYING
-"""
-        regexps = {}
-        for line in default_patterns.strip().split('\n'):
-            line = line.strip()
-            if line.startswith('#') or len(line) == 0:
-                continue
-            # Strip comments to right of pattern
-            line = re.sub(r'\s+#.+', '', line)
-            line = line.replace('\\#', '#')
-            regexps[line] = regexps.get(line, 0) + 1
-
-        # Local ignore file pattern
-        local_ignore_pattern = '^/' + re.escape(LOCAL_IGNORE_FILE) + '$'
-        regexps[local_ignore_pattern] = regexps.get(local_ignore_pattern, 0) + 1
-
-        return self.compile_ignore_regexps(regexps)
+        # Perl reads the patterns from its __DATA__ filehandle; the parser
+        # takes any iterable of lines, so the embedded text splits into one
+        return self.get_ignore_regexps_from_fh(
+            DEFAULT_GLOBAL_IGNORE_DATA.splitlines(True))
 
     #=========================================================================
     # defer($path)
@@ -2431,6 +2394,44 @@ _darcs
 # End of methods; helper functions follow.
 #
 
+#############################################################################
+#
+# Default global list of ignore regexps, verbatim from Stow.pm's __DATA__
+# section (automatically appended there by the Makefile).
+#
+DEFAULT_GLOBAL_IGNORE_DATA = r"""# Comments and blank lines are allowed.
+
+RCS
+.+,v
+
+CVS
+\.\#.+       # CVS conflict files / emacs lock files
+\.cvsignore
+
+\.svn
+_darcs
+\.hg
+
+\.git
+\.gitignore
+\.gitmodules
+
+.+~          # emacs backup files
+\#.*\#       # emacs autosave files
+
+^/README.*
+^/LICENSE.*
+^/COPYING
+"""
+
+# Perl compiles this list once when Stow.pm is loaded, calling the method on
+# the package name. Python needs an object to call it on, and the ignore-list
+# parser reads no instance state, so a bare instance stands in for Perl's
+# class invocant.
+DEFAULT_GLOBAL_IGNORE_REGEXPS = \
+    Stow.__new__(Stow).get_default_global_ignore_regexps()
+
+
 def internal_error(message, *args):
     """
     Output internal error message in a consistent form and die.
@@ -2605,26 +2606,50 @@ def is_readable_by_effective_uid(st):
 
 
 # Getopt::Long option specification, in bin/stow's GetOptions() order.
-# Each entry: (names with the primary name first, value type).
-# Value types: 'flag', 'optint' ('verbose|v:+'), 'string' ('=s').
+# Each entry: (names with the primary name first, value type, handler).
+# Value types: 'flag', 'optint' ('verbose|v:+'), 'string' ('=s'). The handler
+# takes (options, value) and returns the action to switch to, or None to leave
+# the action alone; the options Perl passes to GetOptions without a sub of
+# their own are the ones stored straight into %options here. 'help' and
+# 'version' exit from their handler, where Perl exits right after GetOptions
+# returns ("usage() if $options{help}").
 OPTION_SPECS = [
-    (('verbose', 'v'), 'optint'),
-    (('help', 'h'), 'flag'),
-    (('simulate', 'n', 'no'), 'flag'),
-    (('version', 'V'), 'flag'),
-    (('compat', 'p'), 'flag'),
-    (('dir', 'd'), 'string'),
-    (('target', 't'), 'string'),
-    (('adopt',), 'flag'),
-    (('no-folding',), 'flag'),
-    (('dotfiles',), 'flag'),
-    (('ignore',), 'string'),
-    (('override',), 'string'),
-    (('defer',), 'string'),
-    (('D', 'delete'), 'flag'),
-    (('S', 'stow'), 'flag'),
-    (('R', 'restow'), 'flag'),
+    (('verbose', 'v'), 'optint', lambda options, value: store(options, 'verbose', value)),
+    (('help', 'h'), 'flag', lambda options, value: usage()),
+    (('simulate', 'n', 'no'), 'flag', lambda options, value: store(options, 'simulate', value)),
+    (('version', 'V'), 'flag', lambda options, value: version()),
+    (('compat', 'p'), 'flag', lambda options, value: store(options, 'compat', value)),
+    (('dir', 'd'), 'string', lambda options, value: store(options, 'dir', value)),
+    (('target', 't'), 'string', lambda options, value: store(options, 'target', value)),
+    (('adopt',), 'flag', lambda options, value: store(options, 'adopt', value)),
+    (('no-folding',), 'flag', lambda options, value: store(options, 'no-folding', value)),
+    (('dotfiles',), 'flag', lambda options, value: store(options, 'dotfiles', value)),
+    # clean and pre-compile any regex's at parse time
+    (('ignore',), 'string',
+     lambda options, value: push_regexp(options, 'ignore', '(%s)\\Z', value)),
+    (('override',), 'string',
+     lambda options, value: push_regexp(options, 'override', '\\A(%s)', value)),
+    (('defer',), 'string',
+     lambda options, value: push_regexp(options, 'defer', '\\A(%s)', value)),
+    # a little craziness so we can do different actions on the same line:
+    # a -D, -S, or -R changes the action that will be performed on the
+    # package arguments that follow it.
+    (('D', 'delete'), 'flag', lambda options, value: 'unstow'),
+    (('S', 'stow'), 'flag', lambda options, value: 'stow'),
+    (('R', 'restow'), 'flag', lambda options, value: 'restow'),
 ]
+
+
+def store(options, name, value):
+    """Store an option value, as GetOptions does for its \\%options hash."""
+    options[name] = value
+
+
+def push_regexp(options, name, template, value):
+    """Append a regexp compiled at parse time to a list-valued option."""
+    options.setdefault(name, []).append(
+        compile_option_regexp(template % scope_inline_flags(value)))
+
 
 # Getopt::Long's optional-integer test for 'verbose|v:+' values. Perl anchors
 # with $, which also matches before one trailing newline, so "2\n" counts.
@@ -2658,37 +2683,38 @@ def find_long_option(name, allow_abbrev):
     An exact name/alias match wins; otherwise a unique prefix resolves via
     auto_abbrev (which POSIXLY_CORRECT disables, hence allow_abbrev). A
     prefix matching several options is a fatal ambiguity error. Returns
-    (matched_name, primary_name, value_type) - matched_name is the name as
+    (matched_name, value_type, handler) - matched_name is the name as
     resolved (alias as given, or the full name a prefix expanded to), which
     is what Getopt::Long uses in error messages - or None if unknown.
     """
-    for names, vtype in OPTION_SPECS:
+    for names, vtype, handler in OPTION_SPECS:
         if name in names:
-            return (name, names[0], vtype)
+            return (name, vtype, handler)
     if not allow_abbrev or not name:
         return None
     hits = []
-    for names, vtype in OPTION_SPECS:
+    for names, vtype, handler in OPTION_SPECS:
         matched = [nm for nm in names if nm.startswith(name)]
         if matched:
-            hits.append((matched, names[0], vtype))
+            hits.append((matched, vtype, handler))
     if not hits:
         return None
     if len(hits) > 1:
         all_matched = []
-        for matched, _primary, _vtype in hits:
+        for matched, _vtype, _handler in hits:
             all_matched.extend(matched)
         getopt_error(
             "Option %s is ambiguous (%s)" % (name, ', '.join(sorted(all_matched)))
         )
-    matched, primary, vtype = hits[0]
-    return (matched[0], primary, vtype)
+    matched, vtype, handler = hits[0]
+    return (matched[0], vtype, handler)
 
 
-def apply_long_option(given_name, primary, vtype, attached, args, i, options, action):
+def apply_long_option(given_name, vtype, handler, attached, args, i, options, action):
     """
     Apply one resolved long/+ option, consuming a following argument as its
-    value where Getopt::Long would. Returns the updated (i, action).
+    value where Getopt::Long would, then running the option's handler.
+    Returns the updated (i, action).
     """
     if vtype == 'string':
         # Getopt::Long rejects an EMPTY attached value ("--dir=") as a
@@ -2700,27 +2726,14 @@ def apply_long_option(given_name, primary, vtype, attached, args, i, options, ac
             value = args[i]
         else:
             getopt_error("Option %s requires an argument" % given_name)
-        if primary == 'dir':
-            options['dir'] = value
-        elif primary == 'target':
-            options['target'] = value
-        elif primary == 'ignore':
-            options.setdefault('ignore', []).append(
-                compile_option_regexp('(%s)\\Z' % scope_inline_flags(value)))
-        elif primary == 'override':
-            options.setdefault('override', []).append(
-                compile_option_regexp('\\A(%s)' % scope_inline_flags(value)))
-        elif primary == 'defer':
-            options.setdefault('defer', []).append(
-                compile_option_regexp('\\A(%s)' % scope_inline_flags(value)))
     elif vtype == 'optint':
         # 'verbose|v:+': an attached or following integer sets the level,
         # an empty attached value or anything else increments
         if attached is not None:
             if attached == '':
-                options['verbose'] = options.get('verbose', 0) + 1
+                value = options.get('verbose', 0) + 1
             elif OPTIONAL_INT_RE.match(attached):
-                options['verbose'] = int(attached)
+                value = int(attached)
             else:
                 getopt_error(
                     'Value "%s" invalid for option verbose (number expected)'
@@ -2728,32 +2741,18 @@ def apply_long_option(given_name, primary, vtype, attached, args, i, options, ac
                 )
         elif i + 1 < len(args) and OPTIONAL_INT_RE.match(args[i + 1]):
             i += 1
-            options['verbose'] = int(args[i])
+            value = int(args[i])
         else:
-            options['verbose'] = options.get('verbose', 0) + 1
+            value = options.get('verbose', 0) + 1
     else:
         if attached is not None:
             getopt_error("Option %s does not take an argument" % given_name)
-        if primary == 'simulate':
-            options['simulate'] = True
-        elif primary == 'compat':
-            options['compat'] = True
-        elif primary == 'adopt':
-            options['adopt'] = True
-        elif primary == 'no-folding':
-            options['no-folding'] = True
-        elif primary == 'dotfiles':
-            options['dotfiles'] = True
-        elif primary == 'D':
-            action = 'unstow'
-        elif primary == 'S':
-            action = 'stow'
-        elif primary == 'R':
-            action = 'restow'
-        elif primary == 'help':
-            usage()
-        elif primary == 'version':
-            version()
+        # Getopt::Long stores 1 for a flag
+        value = True
+
+    new_action = handler(options, value)
+    if new_action is not None:
+        action = new_action
     return (i, action)
 
 
@@ -2883,9 +2882,9 @@ def parse_options(args):
             resolved = find_long_option(name, not posixly_correct)
             if resolved is None:
                 getopt_error("Unknown option: %s" % name)
-            given_name, primary, vtype = resolved
+            given_name, vtype, handler = resolved
             i, action = apply_long_option(
-                given_name, primary, vtype, attached, args, i, options, action)
+                given_name, vtype, handler, attached, args, i, options, action)
 
         # Support + prefix (Perl's Getopt::Long getopt_compat mode).
         # Same name resolution as --, but "=" values are NOT recognized:
@@ -2904,9 +2903,9 @@ def parse_options(args):
                     first_byte = opt.encode('utf-8', 'surrogateescape')[0:1]
                 write_raw_stderr(b'Unknown option: ' + first_byte + b'\n')
                 usage(exit_code=1)
-            given_name, primary, vtype = resolved
+            given_name, vtype, handler = resolved
             i, action = apply_long_option(
-                given_name, primary, vtype, None, args, i, options, action)
+                given_name, vtype, handler, None, args, i, options, action)
 
         # Package argument (including "-" which is a valid package name).
         # Also matches +foo when POSIXLY_CORRECT (+ not an option prefix).
