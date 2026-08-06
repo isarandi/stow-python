@@ -764,8 +764,8 @@ def get_config_file_options() -> tuple[dict, list[str], list[str]]:
             # whatever dies later
             record_errno(e.errno)
             continue
-        if not stat.S_ISREG(st.st_mode):
-            raise StowCLIError(f"Could not open {file_path} for reading")
+        # Perl's -r is only an access test: a readable DIRECTORY passes it
+        # and reaches the open
         if not _is_readable_by_effective_uid(st):
             continue
         # File exists and is readable, now open it
@@ -777,7 +777,14 @@ def get_config_file_options() -> tuple[dict, list[str], list[str]]:
             with open(file_path, "r", errors="surrogateescape", newline="\n") as f:
                 for line in f:
                     defaults.extend(perl_shellwords(line.removesuffix("\n")))
-        except IOError:
+        except OSError as e:
+            record_errno(e.errno)
+            if e.errno == errno_module.EISDIR:
+                # Perl's open succeeds on a directory; the read then fails
+                # with EISDIR (setting $!), the loop reads nothing, and
+                # close reports the pending error - a bare die exiting
+                # with $!
+                raise StowCLIError(f"Could not close open file: {file_path}")
             raise StowCLIError(f"Could not open {file_path} for reading")
 
     rc_options, rc_pkgs_to_unstow, rc_pkgs_to_stow = parse_cli_options(defaults)

@@ -968,3 +968,12 @@ class TestCliOptionsBoth:
             )
 
         os.unlink(rc_path)
+
+    def test_stowrc_directory_dies_at_close(self, stow_env):
+        """A directory named .stowrc passes Perl's -r and reaches the open;
+        the read fails with EISDIR, the close reports it, and the bare die
+        exits with $! (21)."""
+        stow_env.create_package("pkg", {"bin/file": "content"})
+        os.makedirs(os.path.join(stow_env.stow_dir, ".stowrc"))
+
+        assert_stow_match(stow_env, ["-t", stow_env.target_dir, "pkg"])
