@@ -123,6 +123,36 @@ def perl_true(value):
     return value != '0'
 
 
+def undef_eq(task_ref, key, value):
+    """
+    Perl's `$task_ref->{key} eq 'value'` when task_ref may be undef.
+
+    Dereferencing undef in rvalue context yields undef, and comparing
+    undef with `eq` warns "Use of uninitialized value in string eq" and
+    is false. Perl appends " at FILE line N." to the warning; only the
+    message itself is reproduced, as with the stat warnings.
+    """
+    if task_ref is None:
+        sys.stderr.write("Use of uninitialized value in string eq\n")
+        return False
+    return task_ref[key] == value
+
+
+def undef_str(task_ref, key):
+    """
+    Perl's `"$task_ref->{key}"` when task_ref may be undef.
+
+    Interpolating undef into a string warns "Use of uninitialized value
+    in concatenation (.) or string" and yields the empty string.
+    """
+    if task_ref is None:
+        sys.stderr.write(
+            "Use of uninitialized value in concatenation (.) or string\n"
+        )
+        return ''
+    return task_ref[key]
+
+
 def warn_unsuccessful(path, syscall):
     """
     Outputs Perl's warning for a stat/lstat which failed on a newline path.
@@ -2323,18 +2353,23 @@ _darcs
             )
 
         if dir_path in self.dir_task_for:
-            task_ref = self.dir_task_for[dir_path]
+            # Perl fetches this task from link_task_for, not dir_task_for;
+            # the guard above has already proven that entry absent, so the
+            # fetch is always undef, both comparisons below warn and fail,
+            # and control falls through to the internal error with an
+            # empty action - replicated exactly, warnings included
+            task_ref = self.link_task_for.get(dir_path)
 
-            if task_ref['action'] == 'remove':
+            if undef_eq(task_ref, 'action', 'remove'):
                 debug(1, 0, "RMDIR %s (duplicates previous action)" % dir_path)
                 return
-            elif task_ref['action'] == 'create':
+            elif undef_eq(task_ref, 'action', 'create'):
                 debug(1, 0, "MKDIR %s (reverts previous action)" % dir_path)
                 self.dir_task_for[dir_path]['action'] = 'skip'
                 del self.dir_task_for[dir_path]
                 return
             else:
-                internal_error("bad task action: %s" % task_ref['action'])
+                internal_error("bad task action: %s" % undef_str(task_ref, 'action'))
 
         debug(1, 0, "RMDIR %s" % dir_path)
         task = {
@@ -2397,7 +2432,14 @@ _darcs
 #
 
 def internal_error(message, *args):
-    """Output internal error message in a consistent form and die."""
+    """
+    Output internal error message in a consistent form and die.
+
+    Like error(), the die exits with $! when a syscall has failed, else
+    255. Perl leaves two blank lines between its Carp trace and the
+    closing note; the trace itself is a Python traceback here.
+    """
+    global _last_errno
     if args:
         error_msg = message % args
     else:
@@ -2405,10 +2447,15 @@ def internal_error(message, *args):
     stack = traceback.format_stack()
     stacktrace = ''.join(stack[:-1])
 
-    sys.stderr.write("\n%s: INTERNAL ERROR: %s\n%s\n" % (ProgramName, error_msg, stacktrace))
+    sys.stderr.write("\n%s: INTERNAL ERROR: %s\n%s\n\n" % (ProgramName, error_msg, stacktrace))
     sys.stderr.write("This _is_ a bug. Please submit a bug report so we can fix it! :-)\n")
     sys.stderr.write("See https://github.com/isarandi/stow-python for how to do this.\n")
-    sys.exit(1)
+    if _last_errno != 0:
+        exit_code = _last_errno
+        _last_errno = 0
+    else:
+        exit_code = 255
+    sys.exit(exit_code)
 
 
 ##############################################################################

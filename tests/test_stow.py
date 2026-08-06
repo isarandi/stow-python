@@ -22,6 +22,8 @@ Test stowing packages - Python port of stow.t
 import os
 import re
 
+import pytest
+
 from testutil import (
     new_Stow, make_path, make_file, make_link,
     make_invalid_link, cd, cat_file, is_link, is_dir_not_symlink,
@@ -492,3 +494,36 @@ class TestStow:
 
         check_no_folding('a')
         check_no_folding('b')
+
+
+class TestDoRmdirTaskClash:
+    """do_rmdir on a directory that already has a planned dir task.
+
+    Perl fetches the task from link_task_for - the wrong hash, which the
+    guard just above has proven empty for this path - so the fetched
+    value is always undef: instead of merging a duplicate removal or
+    reverting a planned creation, both action comparisons warn about the
+    uninitialized value and control falls through to the internal error
+    with an empty action interpolated. Replicated exactly, whatever the
+    real task's action says.
+    """
+
+    def test_planned_dir_task_dies_with_bad_task_action(self, stow_test_env, capsys):
+        stow = new_Stow(dir='../stow')
+        make_path('../stow/pkg')
+
+        task = {'action': 'remove', 'type': 'dir', 'path': 'somedir', 'source': ''}
+        stow.dir_task_for['somedir'] = task
+        stow.tasks = [task]
+
+        with pytest.raises(SystemExit) as excinfo:
+            stow.do_rmdir('somedir')
+        # $!-derived: ENOENT from the preceding probe of a missing path,
+        # matching Perl, where $! is likewise ENOENT at this point
+        assert excinfo.value.code == 2, 'die exits with $!'
+
+        err = capsys.readouterr().err
+        assert err.count("Use of uninitialized value in string eq\n") == 2
+        assert "Use of uninitialized value in concatenation (.) or string\n" in err
+        assert "INTERNAL ERROR: bad task action: \n" in err
+        assert "somedir" in stow.dir_task_for, 'the planned task is never merged'
